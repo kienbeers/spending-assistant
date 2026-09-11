@@ -58,7 +58,11 @@ Sửa `.env.local` xong thì chạy `pm2 restart chi-tieu --update-env`.
 npm install
 npm run dev      # http://localhost:3005 (dữ liệu local: data/chi-tieu.db)
 npm test         # 46 test
-npm run deploy   # đẩy code lên Jetson, build, khởi động lại (giữ nguyên dữ liệu và .env.local)
+npm run deploy   # push lên GitHub → Jetson pull, build, khởi động lại
 ```
+
+**Deploy:** phải commit trước khi deploy. Script sẽ push nhánh hiện tại lên GitHub
+(`github.com/kienbeers/spending-assistant`), rồi Jetson `git reset --hard` về đúng commit đó và build lại.
+Dữ liệu `data/` và `.env.local` trên Jetson không bị xóa vì nằm trong `.gitignore`.
 
 **Sao lưu:** chép file `data/chi-tieu.db` trên Jetson, ví dụ `scp thinhhv@100.88.32.64:projects/chi-tieu/data/chi-tieu.db .`
