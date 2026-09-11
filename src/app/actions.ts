@@ -37,9 +37,13 @@ export async function saveTransaction(txId: number | null, input: unknown): Prom
             ...tx,
             type: tx.type,
             debtId: null,
-            // Ghi "thanh toán tiền nhà 2175 shb" → tự gắn vào khoản định kỳ "Tiền nhà"
+            // Ghi "thanh toán tiền nhà 2.175m shb" → tự gắn vào khoản định kỳ "Tiền nhà";
+            // "lương 14.891m shb" → tự gắn vào nguồn thu "Lương"
             recurringId:
-              tx.recurringId ?? (tx.type === "expense" && txId === null ? repo.findRecurringByNote(tx.note) : null),
+              tx.recurringId ??
+              (txId === null && (tx.type === "expense" || tx.type === "income")
+                ? repo.findRecurringByNote(tx.note, tx.type)
+                : null),
           };
     if (txId === null) {
       savedId = repo.insertTransaction(record);

@@ -493,13 +493,13 @@ export function getRecurring(): Recurring[] {
 
 /**
  * Tìm khoản định kỳ khớp với ghi chú (vd. "thanh toán tiền nhà" → "Tiền nhà"),
- * chỉ lấy khoản đang bật và chưa ghi trong tháng này.
+ * chỉ lấy khoản đúng loại (thu/chi), đang bật và chưa ghi trong tháng này.
  */
-export function findRecurringByNote(note: string): number | null {
+export function findRecurringByNote(note: string, kind: "expense" | "income" = "expense"): number | null {
   const folded = fold(note.normalize("NFC"));
   if (!folded.trim()) return null;
   const matches = getRecurring()
-    .filter((r) => r.active && !r.doneThisMonth)
+    .filter((r) => r.active && !r.doneThisMonth && r.kind === kind)
     .map((r) => ({ id: r.id, phrase: fold(r.name.normalize("NFC")).trim() }))
     .filter((r) => r.phrase && wordRegex(r.phrase, "").test(folded))
     .sort((a, b) => b.phrase.length - a.phrase.length);

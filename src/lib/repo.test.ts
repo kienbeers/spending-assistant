@@ -507,3 +507,56 @@ describe("nâng cấp dữ liệu", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("tự gắn khoản định kỳ theo ghi chú", () => {
+  it("khớp theo tên và đúng loại thu/chi, đã ghi trong tháng thì không khớp nữa", async () => {
+    const { todayVN } = await import("./format");
+    const today = todayVN();
+    const cash = repo.getWallets().find((w) => w.kind === "cash")!;
+
+    repo.createRecurring({
+      name: "Tiền điện",
+      kind: "expense",
+      amount: 700_000,
+      amountUsd: null,
+      categoryId: repo.getCategories().find((c) => c.name === "Hóa đơn")!.id,
+      walletId: null,
+      dayOfMonth: 15,
+      note: "",
+    });
+    repo.createRecurring({
+      name: "Thưởng dự án",
+      kind: "income",
+      amount: 2_000_000,
+      amountUsd: null,
+      categoryId: null,
+      walletId: null,
+      dayOfMonth: null,
+      note: "",
+    });
+    const bill = repo.getRecurring().find((r) => r.name === "Tiền điện")!.id;
+    const bonus = repo.getRecurring().find((r) => r.name === "Thưởng dự án")!.id;
+
+    // Ghi chú chứa tên khoản → khớp
+    expect(repo.findRecurringByNote("thanh toán tiền điện", "expense")).toBe(bill);
+    expect(repo.findRecurringByNote("thưởng dự án tháng 9", "income")).toBe(bonus);
+    // Sai loại thì không khớp (khoản chi không gắn vào nguồn thu)
+    expect(repo.findRecurringByNote("thưởng dự án tháng 9", "expense")).toBeNull();
+    expect(repo.findRecurringByNote("thanh toán tiền điện", "income")).toBeNull();
+    // Ghi chú không liên quan
+    expect(repo.findRecurringByNote("ăn trưa", "expense")).toBeNull();
+
+    // Ghi rồi thì tháng này không gắn thêm nữa
+    repo.insertTransaction({
+      type: "expense",
+      amount: 700_000,
+      walletId: cash.id,
+      toWalletId: null,
+      categoryId: null,
+      note: "thanh toán tiền điện",
+      date: `${today.slice(0, 7)}-15`,
+      recurringId: bill,
+    });
+    expect(repo.findRecurringByNote("thanh toán tiền điện", "expense")).toBeNull();
+  });
+});
