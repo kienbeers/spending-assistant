@@ -1,69 +1,148 @@
-import Image from "next/image";
+import { BellRing } from "lucide-react";
+import Link from "next/link";
+import { connection } from "next/server";
+import { CategoryBars, DailyBars } from "@/components/charts";
+import { MonthSwitcher } from "@/components/month-switcher";
+import { TxEditor } from "@/components/tx-editor";
+import { TxList } from "@/components/tx-list";
+import { addDays, formatVND, isValidMonth, todayVN } from "@/lib/format";
+import { getEditorContext, getMonthSummary, getRecurring, getWallets, listTransactions } from "@/lib/repo";
 
-export default function Home() {
+export default async function Home({ searchParams }: PageProps<"/">) {
+  await connection();
+  const sp = await searchParams;
+  const today = todayVN();
+  const month = typeof sp.m === "string" && isValidMonth(sp.m) ? sp.m : today.slice(0, 7);
+
+  // Khoản định kỳ quá hạn hoặc sắp tới trong 5 ngày (chỉ khi đang xem tháng này)
+  const reminders =
+    month === today.slice(0, 7)
+      ? getRecurring().filter(
+          (r) => r.active && !r.doneThisMonth && r.nextDate !== null && r.nextDate <= addDays(today, 5),
+        )
+      : [];
+
+  const summary = getMonthSummary(month);
+  const wallets = getWallets();
+  const recent = listTransactions({ month, limit: 6 });
+  // Tổng số dư = tiền thật còn trong các ví/tài khoản (không trừ dư nợ thẻ tín dụng)
+  const totalBalance = wallets.filter((w) => w.kind !== "credit").reduce((s, w) => s + w.balance, 0);
+  const cardDebt = wallets.filter((w) => w.kind === "credit").reduce((s, w) => s + w.used, 0);
+  const net = summary.income - summary.expense;
+  const change =
+    summary.prevExpense > 0 ? Math.round(((summary.expense - summary.prevExpense) / summary.prevExpense) * 100) : null;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <MonthSwitcher month={month} basePath="/" />
+        <Link href="/vi" className="text-right text-[13px] leading-tight text-ink-3">
+          Tổng số dư
+          <span className="block text-[15px] font-semibold text-ink tabular-nums">{formatVND(totalBalance)}</span>
+          {cardDebt > 0 && (
+            <span className="block text-[12px] text-ink-3 tabular-nums">nợ thẻ −{formatVND(cardDebt)}</span>
+          )}
+        </Link>
+      </div>
+
+      {reminders.length > 0 && (
+        <section className="card border-expense/30 p-4">
+          <h2 className="mb-2 flex items-center gap-2 font-semibold">
+            <BellRing size={18} className="text-expense" /> Cần ghi
+          </h2>
+          <ul className="divide-y divide-line">
+            {reminders.map((r) => (
+              <li key={r.id} className="flex items-center gap-3 py-2">
+                <span aria-hidden>{r.categoryIcon ?? (r.kind === "income" ? "💵" : "🔁")}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[15px] font-medium">
+                    {r.kind === "income" && <span className="text-income">+ </span>}
+                    {r.name}
+                  </span>
+                  <span className={`text-[13px] tabular-nums ${r.overdue ? "font-medium text-expense" : "text-ink-3"}`}>
+                    {r.overdue
+                      ? `Quá hạn ${Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${r.nextDate}T00:00:00Z`)) / 86_400_000)} ngày`
+                      : `Ngày ${r.dayOfMonth}`}
+                    {r.lastAmount
+                      ? ` · lần trước ${formatVND(r.lastAmount)}`
+                      : r.amount
+                        ? ` · dự kiến ${formatVND(r.amount)}`
+                        : r.amountUsd
+                          ? ` · ${r.amountUsd} USD`
+                          : ""}
+                  </span>
+                </span>
+                <Link
+                  href={`/them?dk=${r.id}`}
+                  className={`${r.overdue ? "btn-primary" : "btn-ghost"} min-h-9 shrink-0 px-3 text-sm`}
+                >
+                  Ghi
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+        <div className="space-y-4">
+          <section className="card p-4" aria-label="Nhập nhanh">
+            <TxEditor ctx={getEditorContext()} compact />
+          </section>
+
+          <section className="card p-4">
+            <h2 className="text-[13px] font-medium text-ink-3">Đã chi</h2>
+            <p className="mt-0.5 text-[40px] leading-tight font-bold tracking-tight">{formatVND(summary.expense)}</p>
+            {change !== null && (
+              <p className="text-[13px] text-ink-3">
+                <span className={`font-semibold ${change > 0 ? "text-expense" : "text-income"}`}>
+                  {change > 0 ? "↑" : change < 0 ? "↓" : ""}
+                  {Math.abs(change)}%
+                </span>{" "}
+                so với {summary.comparedToDay ? `cùng kỳ tháng trước (đến ngày ${summary.comparedToDay})` : "tháng trước"}
+              </p>
+            )}
+            <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-line pt-3">
+              <div>
+                <dt className="text-[13px] text-ink-3">Thu</dt>
+                <dd className="text-lg font-semibold text-income tabular-nums">{formatVND(summary.income)}</dd>
+              </div>
+              <div>
+                <dt className="text-[13px] text-ink-3">Còn lại (thu − chi)</dt>
+                <dd className={`text-lg font-semibold tabular-nums ${net < 0 ? "text-expense" : ""}`}>
+                  {net < 0 ? "−" : ""}
+                  {formatVND(Math.abs(net))}
+                </dd>
+              </div>
+            </dl>
+          </section>
+
+          <section className="card p-4">
+            <h2 className="mb-3 font-semibold">Chi theo ngày</h2>
+            <DailyBars month={month} daily={summary.daily} today={today} />
+          </section>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="space-y-4">
+          <section className="card p-4">
+            <div className="mb-2 flex items-baseline justify-between">
+              <h2 className="font-semibold">Chi theo danh mục</h2>
+              <span className="text-[12px] text-ink-3">% tổng · so với tháng trước</span>
+            </div>
+            <CategoryBars items={summary.byCategory} month={month} total={summary.expense} />
+          </section>
+
+          <section className="card overflow-hidden">
+            <div className="flex items-baseline justify-between px-4 pt-4 pb-1">
+              <h2 className="font-semibold">Gần đây</h2>
+              <Link href={`/giao-dich${month !== today.slice(0, 7) ? `?m=${month}` : ""}`} className="text-sm font-medium text-accent">
+                Xem tất cả
+              </Link>
+            </div>
+            <TxList txs={recent} grouped={false} from="/" />
+          </section>
         </div>
-      </main>
+      </div>
     </div>
   );
 }

@@ -1,26 +1,119 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  color-scheme: light;
+  --bg: #f4f1ea;
+  --surface: #fffdf8;
+  --surface-2: #ece6da;
+  --line: #e2dbcd;
+  --ink: #1f1b16;
+  --ink-2: #544d43;
+  --ink-3: #736b5f;
+  --accent: #0f6e5c;
+  --accent-ink: #ffffff;
+  --accent-soft: #d9ebe4;
+  --expense: #b4441f;
+  --income: #1d7a3e;
+  --transfer: #56616b;
+  --track: #e6dfd2;
+  /* Biểu đồ thu/chi: cặp xanh dương – cam (đã kiểm tra phân biệt được với người mù màu) */
+  --series-in: #2a78d6;
+  --series-out: #eb6834;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    color-scheme: dark;
+    --bg: #12110f;
+    --surface: #1b1a17;
+    --surface-2: #26241f;
+    --line: #34312b;
+    --ink: #f3efe8;
+    --ink-2: #c4bdb1;
+    --ink-3: #958e82;
+    --accent: #45b89d;
+    --accent-ink: #0b1512;
+    --accent-soft: #183630;
+    --expense: #f08c66;
+    --income: #72cf8f;
+    --transfer: #a3adb6;
+    --track: #2e2b25;
+    --series-in: #3987e5;
+    --series-out: #d95926;
   }
 }
 
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-expense: var(--expense);
+  --color-income: var(--income);
+  --color-transfer: var(--transfer);
+  --color-track: var(--track);
+  --color-series-in: var(--series-in);
+  --color-series-out: var(--series-out);
+  --font-sans: var(--font-app), ui-sans-serif, system-ui, sans-serif;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-feature-settings: "tnum" 0;
+}
+
+button,
+a,
+input,
+select,
+summary {
+  touch-action: manipulation;
+}
+
+summary {
+  list-style: none;
+}
+summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Dùng @utility để các lớp này @apply được lẫn nhau (Tailwind v4) */
+@utility card {
+  @apply rounded-2xl border border-line bg-surface;
+}
+@utility field {
+  @apply w-full rounded-xl border border-line bg-surface px-3 py-2.5 text-base text-ink outline-none placeholder:text-ink-3 focus:border-accent;
+}
+@utility btn {
+  @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-[15px] font-medium transition active:scale-[0.98] disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-accent text-accent-ink;
+}
+@utility btn-ghost {
+  @apply btn border border-line bg-surface text-ink;
+}
+/* Chip chọn: đặt aria-pressed="true" để bật */
+@utility chip {
+  @apply inline-flex min-h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-sm whitespace-nowrap text-ink-2 transition active:scale-[0.97] aria-pressed:border-accent aria-pressed:bg-accent-soft aria-pressed:font-medium aria-pressed:text-ink;
+}
+@utility label {
+  @apply mb-1.5 block text-[13px] font-medium text-ink-3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
 }
