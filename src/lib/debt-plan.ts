@@ -124,9 +124,9 @@ function priorityOrder(debts: PlanDebt[]): PlanDebt[] {
 const MAX_MONTHS = 120;
 
 /** Đọc dữ liệu thật rồi tính chiến lược */
-export function buildDebtStrategy(extraPerMonth: number): DebtStrategy {
-  const open = getDebts().filter((d) => d.isOpen && d.direction === "borrow");
-  const cards = getWallets().filter((w) => w.kind === "credit" && w.used > 0);
+export function buildDebtStrategy(userId: number, extraPerMonth: number): DebtStrategy {
+  const open = getDebts(userId).filter((d) => d.isOpen && d.direction === "borrow");
+  const cards = getWallets(userId).filter((w) => w.kind === "credit" && w.used > 0);
   return computeStrategy([...open.map(toPlanDebt), ...cards.map(cardToPlanDebt)], extraPerMonth);
 }
 

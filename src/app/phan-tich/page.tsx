@@ -6,6 +6,7 @@ import { HBarList, MonthlyFlowChart, Sparkbars } from "@/components/charts";
 import { TxList } from "@/components/tx-list";
 import { getCashflow, monthRange } from "@/lib/analytics";
 import { formatVND, todayVN } from "@/lib/format";
+import { requireUserId } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Phân tích" };
 
@@ -22,11 +23,12 @@ function Money({ value, className = "" }: { value: number; className?: string })
 
 export default async function AnalysisPage({ searchParams }: PageProps<"/phan-tich">) {
   await connection();
+  const userId = await requireUserId();
   const { k } = await searchParams;
   const count = RANGES.find((r) => String(r) === k) ?? 6;
   const current = todayVN().slice(0, 7);
   const months = monthRange(current, count);
-  const cf = getCashflow(months);
+  const cf = getCashflow(userId, months);
   const { totals, averages } = cf;
   const obligations = averages.fixed + averages.repay;
   const anomalies = cf.categoryTrends.filter((t) => t.anomaly);

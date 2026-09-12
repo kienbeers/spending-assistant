@@ -6,6 +6,7 @@ import { connection } from "next/server";
 import { TxEditor } from "@/components/tx-editor";
 import type { DebtAction } from "@/lib/quick-parse";
 import { getEditorContext, getTransaction, type Tx } from "@/lib/repo";
+import { requireUserId } from "@/lib/session";
 
 function debtAction(tx: Tx): DebtAction | null {
   if (!tx.debtDirection) return null;
@@ -17,9 +18,10 @@ export const metadata: Metadata = { title: "Sửa giao dịch" };
 
 export default async function EditTransactionPage({ params, searchParams }: PageProps<"/giao-dich/[id]">) {
   await connection();
+  const userId = await requireUserId();
   const { id } = await params;
   const { from } = await searchParams;
-  const tx = getTransaction(Number(id));
+  const tx = getTransaction(userId, Number(id));
   if (!tx) notFound();
 
   // Chỉ cho quay về đường dẫn nội bộ
@@ -39,7 +41,7 @@ export default async function EditTransactionPage({ params, searchParams }: Page
       </div>
       <section className="card p-4">
         <TxEditor
-          ctx={getEditorContext(tx.debtId)}
+          ctx={getEditorContext(userId, tx.debtId)}
           txId={tx.id}
           backHref={backHref}
           initial={{

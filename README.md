@@ -1,10 +1,13 @@
 # Chi tiêu
 
 Sổ chi tiêu cá nhân: nhập nhanh, phân tích dòng tiền, sổ nợ, ngân sách và trợ lý AI chạy local.
+Mỗi tài khoản là một sổ riêng, không thấy dữ liệu của nhau.
 Chạy trên Jetson (`thinhhv@100.88.32.64`), dữ liệu trong `~/projects/chi-tieu/data/chi-tieu.db` (SQLite).
 
 - **Mở app:** http://100.88.32.64:3005. Dùng được cả ở nhà lẫn bên ngoài, miễn điện thoại bật Tailscale.
 - **Trên iPhone:** Safari → Chia sẻ → **Thêm vào MH chính**.
+- **Đăng nhập:** lần đầu vào `/dang-ky` để tạo tài khoản; tài khoản đầu tiên nhận luôn dữ liệu đang có.
+  Phiên đăng nhập giữ 60 ngày, mật khẩu băm bằng scrypt, không có ai ở ngoài vào được vì app chỉ mở trong Tailscale.
 
 ## Tính năng
 
@@ -57,7 +60,7 @@ Sửa `.env.local` xong thì chạy `pm2 restart chi-tieu --update-env`.
 ```bash
 npm install
 npm run dev      # http://localhost:3005 (dữ liệu local: data/chi-tieu.db)
-npm test         # 46 test
+npm test         # 76 test
 npm run deploy   # push lên GitHub → Jetson pull, build, khởi động lại
 ```
 

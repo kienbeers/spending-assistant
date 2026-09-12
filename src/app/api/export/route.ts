@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { debtLabel } from "@/components/tx-list";
 import { isValidMonth } from "@/lib/format";
 import { listTransactions } from "@/lib/repo";
+import { apiUserId, UNAUTHORIZED } from "@/lib/session";
 
 const TYPE_LABEL = { expense: "Chi", income: "Thu", transfer: "Chuyển ví" } as const;
 
@@ -11,10 +12,12 @@ function csvCell(value: string | number | null): string {
 }
 
 /** GET /api/export?m=YYYY-MM → file CSV (mở được bằng Excel). Bỏ `m` để xuất tất cả. */
-export function GET(request: NextRequest) {
+export async function GET(request: NextRequest) {
+  const userId = await apiUserId();
+  if (!userId) return UNAUTHORIZED();
   const m = request.nextUrl.searchParams.get("m");
   const month = m && isValidMonth(m) ? m : undefined;
-  const txs = listTransactions({ month, limit: 1_000_000 }).reverse();
+  const txs = listTransactions(userId, { month, limit: 1_000_000 }).reverse();
 
   const header = ["Ngày", "Loại", "Số tiền", "Ví", "Sang ví", "Danh mục", "Khoản nợ", "Ghi chú"];
   const rows = txs.map((t) => [

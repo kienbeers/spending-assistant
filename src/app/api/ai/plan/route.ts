@@ -4,19 +4,22 @@ import { planPrompt, planSchema, SYSTEM_PROMPT } from "@/lib/ai-prompts";
 import { isValidMonth } from "@/lib/format";
 import { buildFinancialSnapshot, buildPlanFrame, hasAnyTransactions, saveAiReport } from "@/lib/planning";
 import { shiftMonth } from "@/lib/format";
+import { apiUserId, UNAUTHORIZED } from "@/lib/session";
 
 const bodySchema = z.object({ month: z.string().refine(isValidMonth) });
 
 /** POST /api/ai/plan → AI đề xuất ngân sách tháng (đã kiểm tra lại bằng code). */
 export async function POST(request: Request) {
+  const userId = await apiUserId();
+  if (!userId) return UNAUTHORIZED();
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "Yêu cầu không hợp lệ" }, { status: 400 });
   const { month } = parsed.data;
 
-  if (!hasAnyTransactions()) {
+  if (!hasAnyTransactions(userId)) {
     return Response.json({ error: "Chưa có giao dịch nào để lập kế hoạch." }, { status: 422 });
   }
-  const frame = buildPlanFrame(month);
+  const frame = buildPlanFrame(userId, month);
   if (frame.suggestions.length === 0) {
     return Response.json({ error: "Cần ít nhất 1 tháng có dữ liệu chi tiêu để lập kế hoạch." }, { status: 422 });
   }
@@ -27,7 +30,7 @@ export async function POST(request: Request) {
 
   try {
     // Số liệu tháng trước tháng lập kế hoạch
-    const snapshot = buildFinancialSnapshot(shiftMonth(month, -1));
+    const snapshot = buildFinancialSnapshot(userId, shiftMonth(month, -1));
     const out = await ai.json({ system: SYSTEM_PROMPT, prompt: planPrompt(frame, snapshot), schema: planSchema });
 
     // Không tin tuyệt đối vào AI: chỉ nhận id hợp lệ, giữ trong biên hợp lý quanh mức trung bình
@@ -66,7 +69,7 @@ export async function POST(request: Request) {
       for (const it of items) if (!it.isFixed) it.amount = Math.floor((it.amount * ratio) / 10_000) * 10_000;
     }
     const total = items.reduce((t, it) => t + it.amount, 0);
-    saveAiReport("plan", month, JSON.stringify({ summary: out.summary, items }), `${ai.name}:${ai.model}`);
+    saveAiReport(userId, "plan", month, JSON.stringify({ summary: out.summary, items }), `${ai.name}:${ai.model}`);
 
     return Response.json({
       summary: out.summary,

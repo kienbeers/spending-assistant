@@ -1,6 +1,6 @@
 "use server";
 
-// App chạy local cho 1 người dùng nên không có bước xác thực trong các action.
+// Mọi action đều chạy dưới tài khoản đang đăng nhập; dữ liệu các tài khoản tách rời nhau.
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { isValidDate, isValidMonth, todayVN } from "@/lib/format";
@@ -16,6 +16,7 @@ import {
   updatePlan,
 } from "@/lib/planning";
 import { DEBT_ACTION_DIRECTION, DEBT_ACTION_TX_TYPE } from "@/lib/quick-parse";
+import { requireUserId } from "@/lib/session";
 import { txSchema } from "@/lib/tx-schema";
 import * as repo from "@/lib/repo";
 
@@ -24,6 +25,7 @@ export type ActionResult = { ok: true; id: number } | { ok: false; error: string
 const id = z.coerce.number().int().positive();
 
 export async function saveTransaction(txId: number | null, input: unknown): Promise<ActionResult> {
+  const userId = await requireUserId();
   const parsed = txSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Dữ liệu không hợp lệ" };
   const tx = parsed.data;
@@ -32,7 +34,7 @@ export async function saveTransaction(txId: number | null, input: unknown): Prom
   try {
     const record =
       tx.type === "debt"
-        ? resolveDebtEntry(tx)
+        ? resolveDebtEntry(userId, tx)
         : {
             ...tx,
             type: tx.type,
@@ -42,17 +44,17 @@ export async function saveTransaction(txId: number | null, input: unknown): Prom
             recurringId:
               tx.recurringId ??
               (txId === null && (tx.type === "expense" || tx.type === "income")
-                ? repo.findRecurringByNote(tx.note, tx.type)
+                ? repo.findRecurringByNote(userId, tx.note, tx.type)
                 : null),
           };
     if (txId === null) {
-      savedId = repo.insertTransaction(record);
+      savedId = repo.insertTransaction(userId, record);
     } else {
-      repo.updateTransaction(id.parse(txId), record);
+      repo.updateTransaction(userId, id.parse(txId), record);
       savedId = txId;
     }
     if (tx.type === "expense" || tx.type === "income") {
-      if (tx.categoryId && tx.note) repo.learnKeyword(tx.note, tx.categoryId);
+      if (tx.categoryId && tx.note) repo.learnKeyword(userId, tx.note, tx.categoryId);
     }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Không lưu được" };
@@ -62,20 +64,20 @@ export async function saveTransaction(txId: number | null, input: unknown): Prom
 }
 
 /** Giao dịch nợ → giao dịch thu/chi gắn khoản nợ; tạo khoản nợ mới khi cần. */
-function resolveDebtEntry(tx: z.infer<typeof txSchema>): repo.TxInput {
+function resolveDebtEntry(userId: number, tx: z.infer<typeof txSchema>): repo.TxInput {
   const action = tx.debtAction!;
   const direction = DEBT_ACTION_DIRECTION[action];
   let debtId = tx.debtId;
 
   if (debtId) {
-    const debt = repo.getDebt(debtId);
+    const debt = repo.getDebt(userId, debtId);
     if (!debt) throw new Error("Không tìm thấy khoản nợ");
     if (debt.direction !== direction) throw new Error("Khoản nợ không khớp loại giao dịch");
   } else {
     const name = tx.debtName.trim();
     if (action === "collect" || action === "repay") throw new Error("Chọn khoản nợ cần trả / thu");
     if (!name) throw new Error(action === "lend" ? "Nhập tên người vay" : "Nhập tên người / nơi cho vay");
-    debtId = repo.createDebt({
+    debtId = repo.createDebt(userId, {
       direction,
       name,
       aliases: "",
@@ -102,7 +104,7 @@ function resolveDebtEntry(tx: z.infer<typeof txSchema>): repo.TxInput {
 }
 
 export async function removeTransaction(txId: number): Promise<void> {
-  repo.deleteTransaction(id.parse(txId));
+  repo.deleteTransaction(await requireUserId(), id.parse(txId));
   revalidatePath("/", "layout");
 }
 
@@ -137,22 +139,22 @@ const walletSchema = z
   );
 
 export async function createWalletAction(formData: FormData) {
-  repo.createWallet(walletSchema.parse(Object.fromEntries(formData)));
+  repo.createWallet(await requireUserId(), walletSchema.parse(Object.fromEntries(formData)));
   revalidatePath("/", "layout");
 }
 
 export async function updateWalletAction(formData: FormData) {
-  repo.updateWallet(id.parse(formData.get("id")), walletSchema.parse(Object.fromEntries(formData)));
+  repo.updateWallet(await requireUserId(), id.parse(formData.get("id")), walletSchema.parse(Object.fromEntries(formData)));
   revalidatePath("/", "layout");
 }
 
 export async function setDefaultWalletAction(formData: FormData) {
-  repo.setDefaultWallet(id.parse(formData.get("id")));
+  repo.setDefaultWallet(await requireUserId(), id.parse(formData.get("id")));
   revalidatePath("/", "layout");
 }
 
 export async function deleteWalletAction(formData: FormData) {
-  repo.deleteWallet(id.parse(formData.get("id")));
+  repo.deleteWallet(await requireUserId(), id.parse(formData.get("id")));
   revalidatePath("/", "layout");
 }
 
@@ -165,33 +167,33 @@ const categorySchema = z.object({
 
 export async function createCategoryAction(formData: FormData) {
   const data = categorySchema.extend({ type: z.enum(["expense", "income"]) }).parse(Object.fromEntries(formData));
-  repo.createCategory(data);
+  repo.createCategory(await requireUserId(), data);
   revalidatePath("/", "layout");
 }
 
 export async function updateCategoryAction(formData: FormData) {
-  repo.updateCategory(id.parse(formData.get("id")), categorySchema.parse(Object.fromEntries(formData)));
+  repo.updateCategory(await requireUserId(), id.parse(formData.get("id")), categorySchema.parse(Object.fromEntries(formData)));
   revalidatePath("/", "layout");
 }
 
 export async function toggleCategoryFixedAction(formData: FormData) {
-  repo.setCategoryFixed(id.parse(formData.get("id")), formData.get("isFixed") === "1");
+  repo.setCategoryFixed(await requireUserId(), id.parse(formData.get("id")), formData.get("isFixed") === "1");
   revalidatePath("/", "layout");
 }
 
 export async function deleteCategoryAction(formData: FormData) {
-  repo.deleteCategory(id.parse(formData.get("id")));
+  repo.deleteCategory(await requireUserId(), id.parse(formData.get("id")));
   revalidatePath("/", "layout");
 }
 
 export async function addKeywordAction(formData: FormData) {
   const keyword = z.string().trim().min(1).max(60).parse(formData.get("keyword"));
-  repo.upsertKeyword(keyword, id.parse(formData.get("categoryId")));
+  repo.upsertKeyword(await requireUserId(), keyword, id.parse(formData.get("categoryId")));
   revalidatePath("/", "layout");
 }
 
 export async function deleteKeywordAction(formData: FormData) {
-  repo.deleteKeyword(id.parse(formData.get("id")));
+  repo.deleteKeyword(await requireUserId(), id.parse(formData.get("id")));
   revalidatePath("/", "layout");
 }
 
@@ -223,6 +225,7 @@ const debtSchema = z.object({
 });
 
 export async function createDebtAction(formData: FormData) {
+  const userId = await requireUserId();
   const raw = Object.fromEntries(formData);
   const base = debtSchema.parse(raw);
   const direction = z.enum(["lend", "borrow"]).parse(raw.direction);
@@ -231,9 +234,9 @@ export async function createDebtAction(formData: FormData) {
   const amount = base.openingAmount;
 
   // Có chọn ví → tiền thực sự đi qua ví: ghi giao dịch nợ thay vì nợ ban đầu
-  const debtId = repo.createDebt({ ...base, direction, createdOn, openingAmount: walletId ? 0 : amount });
+  const debtId = repo.createDebt(userId, { ...base, direction, createdOn, openingAmount: walletId ? 0 : amount });
   if (walletId && amount > 0) {
-    repo.insertTransaction({
+    repo.insertTransaction(userId, {
       type: direction === "lend" ? "expense" : "income",
       amount,
       walletId,
@@ -248,12 +251,13 @@ export async function createDebtAction(formData: FormData) {
 }
 
 export async function updateDebtAction(formData: FormData) {
-  repo.updateDebt(id.parse(formData.get("id")), debtSchema.parse(Object.fromEntries(formData)));
+  repo.updateDebt(await requireUserId(), id.parse(formData.get("id")), debtSchema.parse(Object.fromEntries(formData)));
   revalidatePath("/", "layout");
 }
 
 /** Trả hết khoản nợ: gốc + tiền lãi kỳ này trong một lần. */
 export async function payOffDebtAction(formData: FormData) {
+  const userId = await requireUserId();
   const money = z.preprocess((v) => String(v ?? "0").replace(/[^\d]/g, "") || "0", z.coerce.number().int().min(0));
   const data = z
     .object({
@@ -264,30 +268,31 @@ export async function payOffDebtAction(formData: FormData) {
       interest: money,
     })
     .parse(Object.fromEntries(formData));
-  repo.payOffDebt(data);
+  repo.payOffDebt(userId, data);
   revalidatePath("/", "layout");
 }
 
 export async function setDebtClosedAction(formData: FormData) {
-  repo.setDebtClosed(id.parse(formData.get("id")), formData.get("closed") === "1");
+  repo.setDebtClosed(await requireUserId(), id.parse(formData.get("id")), formData.get("closed") === "1");
   revalidatePath("/", "layout");
 }
 
 export async function deleteDebtAction(formData: FormData) {
-  repo.deleteDebt(id.parse(formData.get("id")));
+  repo.deleteDebt(await requireUserId(), id.parse(formData.get("id")));
   revalidatePath("/", "layout");
 }
 
 // --- Ngân sách & mục tiêu ------------------------------------------------------------
 
 export async function saveBudgetsAction(month: string, items: { categoryId: number; amount: number }[]) {
+  const userId = await requireUserId();
   const data = z
     .object({
       month: z.string().refine(isValidMonth),
       items: z.array(z.object({ categoryId: z.number().int().positive(), amount: z.number().int().min(0).max(1e13) })),
     })
     .parse({ month, items });
-  saveBudgets(data.month, data.items);
+  saveBudgets(userId, data.month, data.items);
   revalidatePath("/", "layout");
 }
 
@@ -295,7 +300,7 @@ export async function saveExpectedIncomeAction(formData: FormData) {
   const amount = z
     .preprocess((v) => String(v ?? "0").replace(/[^\d]/g, "") || "0", z.coerce.number().int().min(0).max(1e13))
     .parse(formData.get("expectedIncome"));
-  repo.setSetting(EXPECTED_INCOME_KEY, String(amount));
+  repo.setSetting(await requireUserId(), EXPECTED_INCOME_KEY, String(amount));
   revalidatePath("/", "layout");
 }
 
@@ -310,17 +315,17 @@ const goalSchema = z.object({
 });
 
 export async function createGoalAction(formData: FormData) {
-  createGoal(goalSchema.parse(Object.fromEntries(formData)));
+  createGoal(await requireUserId(), goalSchema.parse(Object.fromEntries(formData)));
   revalidatePath("/", "layout");
 }
 
 export async function updateGoalAction(formData: FormData) {
-  updateGoal(id.parse(formData.get("id")), goalSchema.parse(Object.fromEntries(formData)));
+  updateGoal(await requireUserId(), id.parse(formData.get("id")), goalSchema.parse(Object.fromEntries(formData)));
   revalidatePath("/", "layout");
 }
 
 export async function deleteGoalAction(formData: FormData) {
-  deleteGoal(id.parse(formData.get("id")));
+  deleteGoal(await requireUserId(), id.parse(formData.get("id")));
   revalidatePath("/", "layout");
 }
 
@@ -341,22 +346,22 @@ const recurringSchema = z.object({
 });
 
 export async function createRecurringAction(formData: FormData) {
-  repo.createRecurring(recurringSchema.parse(Object.fromEntries(formData)));
+  repo.createRecurring(await requireUserId(), recurringSchema.parse(Object.fromEntries(formData)));
   revalidatePath("/", "layout");
 }
 
 export async function updateRecurringAction(formData: FormData) {
-  repo.updateRecurring(id.parse(formData.get("id")), recurringSchema.parse(Object.fromEntries(formData)));
+  repo.updateRecurring(await requireUserId(), id.parse(formData.get("id")), recurringSchema.parse(Object.fromEntries(formData)));
   revalidatePath("/", "layout");
 }
 
 export async function setRecurringActiveAction(formData: FormData) {
-  repo.setRecurringActive(id.parse(formData.get("id")), formData.get("active") === "1");
+  repo.setRecurringActive(await requireUserId(), id.parse(formData.get("id")), formData.get("active") === "1");
   revalidatePath("/", "layout");
 }
 
 export async function deleteRecurringAction(formData: FormData) {
-  repo.deleteRecurring(id.parse(formData.get("id")));
+  repo.deleteRecurring(await requireUserId(), id.parse(formData.get("id")));
   revalidatePath("/", "layout");
 }
 
@@ -377,21 +382,25 @@ const planSchema = z.object({
 });
 
 export async function createPlanAction(formData: FormData) {
-  createPlan(planSchema.parse(Object.fromEntries(formData)));
+  createPlan(await requireUserId(), planSchema.parse(Object.fromEntries(formData)));
   revalidatePath("/", "layout");
 }
 
 export async function updatePlanAction(formData: FormData) {
-  updatePlan(id.parse(formData.get("id")), planSchema.parse(Object.fromEntries(formData)));
+  updatePlan(await requireUserId(), id.parse(formData.get("id")), planSchema.parse(Object.fromEntries(formData)));
   revalidatePath("/", "layout");
 }
 
 export async function setPlanStatusAction(formData: FormData) {
-  setPlanStatus(id.parse(formData.get("id")), z.enum(["active", "done", "archived"]).parse(formData.get("status")));
+  setPlanStatus(
+    await requireUserId(),
+    id.parse(formData.get("id")),
+    z.enum(["active", "done", "archived"]).parse(formData.get("status")),
+  );
   revalidatePath("/", "layout");
 }
 
 export async function deletePlanAction(formData: FormData) {
-  deletePlan(id.parse(formData.get("id")));
+  deletePlan(await requireUserId(), id.parse(formData.get("id")));
   revalidatePath("/", "layout");
 }

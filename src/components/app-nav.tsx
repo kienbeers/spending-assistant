@@ -1,8 +1,9 @@
 "use client";
 
-import { ChartColumn, Flag, HandCoins, LayoutDashboard, List, Plus, Tags, Target, Wallet } from "lucide-react";
+import { ChartColumn, Flag, HandCoins, LayoutDashboard, List, LogOut, Plus, Tags, Target, Wallet } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { logoutAction } from "@/app/auth-actions";
 
 // Thanh dưới (điện thoại): 4 mục chính + nút Thêm ở giữa
 const PRIMARY = [
@@ -21,7 +22,7 @@ const SECONDARY = [
   { href: "/danh-muc", label: "Danh mục", icon: Tags },
 ];
 
-export function AppNav() {
+export function AppNav({ user }: { user: { name: string; username: string } }) {
   const pathname = usePathname();
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
 
@@ -49,6 +50,17 @@ export function AppNav() {
           >
             <Plus size={16} strokeWidth={2.5} /> Thêm
           </Link>
+          <form action={logoutAction} className="ml-2 flex items-center gap-1.5">
+            <span className="max-w-32 truncate text-sm text-ink-3">{user.name || user.username}</span>
+            <button
+              type="submit"
+              aria-label="Đăng xuất"
+              title="Đăng xuất"
+              className="flex size-9 items-center justify-center rounded-lg text-ink-3 transition hover:text-ink"
+            >
+              <LogOut size={17} />
+            </button>
+          </form>
         </nav>
       </header>
 
@@ -69,6 +81,15 @@ export function AppNav() {
               <Icon size={21} />
             </Link>
           ))}
+          <form action={logoutAction} className="flex">
+            <button
+              type="submit"
+              aria-label={`Đăng xuất ${user.name || user.username}`}
+              className="flex size-11 items-center justify-center rounded-full text-ink-3 active:bg-surface-2"
+            >
+              <LogOut size={20} />
+            </button>
+          </form>
         </nav>
       </header>
 

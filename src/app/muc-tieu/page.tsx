@@ -10,6 +10,7 @@ import { buildDebtStrategy } from "@/lib/debt-plan";
 import { formatVND, todayVN } from "@/lib/format";
 import { buildPlanFrame, getPlans, type Plan } from "@/lib/planning";
 import { getWallets } from "@/lib/repo";
+import { requireUserId } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Mục tiêu" };
 
@@ -24,22 +25,23 @@ const KIND_LABEL = {
 
 export default async function GoalsPage() {
   await connection();
+  const userId = await requireUserId();
   const today = todayVN();
-  const plans = getPlans();
+  const plans = getPlans(userId);
   const active = plans.filter((p) => p.status === "active");
   const done = plans.filter((p) => p.status !== "active");
 
-  const frame = buildPlanFrame(today.slice(0, 7));
-  const base = buildDebtStrategy(0);
+  const frame = buildPlanFrame(userId, today.slice(0, 7));
+  const base = buildDebtStrategy(userId, 0);
   const leftAfterRequired = frame.expectedIncome - base.requiredMonthly;
-  const cash = getWallets()
+  const cash = getWallets(userId)
     .filter((w) => w.kind !== "credit")
     .reduce((s, w) => s + w.balance, 0);
 
   // So sánh vài mức dồn tiền để thấy khác biệt
   const options = [0, 1_000_000, 2_000_000, 3_000_000, 5_000_000].map((extra) => ({
     extra,
-    result: buildDebtStrategy(extra),
+    result: buildDebtStrategy(userId, extra),
   }));
 
   const ai = getAi();
@@ -177,7 +179,7 @@ export default async function GoalsPage() {
           <ul className="space-y-2">
             {active.map((p) => (
               <li key={p.id}>
-                <PlanCard plan={p} aiReady={aiStatus.ok} />
+                <PlanCard plan={p} aiReady={aiStatus.ok} userId={userId} />
               </li>
             ))}
           </ul>
@@ -202,7 +204,7 @@ export default async function GoalsPage() {
           <ul className="mt-2 space-y-2">
             {done.map((p) => (
               <li key={p.id}>
-                <PlanCard plan={p} aiReady={aiStatus.ok} />
+                <PlanCard plan={p} aiReady={aiStatus.ok} userId={userId} />
               </li>
             ))}
           </ul>
@@ -235,8 +237,8 @@ function Row({ label, value, muted }: { label: string; value: number; muted?: bo
   );
 }
 
-function PlanCard({ plan: p, aiReady }: { plan: Plan; aiReady: boolean }) {
-  const strategy = buildDebtStrategy(p.extraPerMonth);
+function PlanCard({ plan: p, aiReady, userId }: { plan: Plan; aiReady: boolean; userId: number }) {
+  const strategy = buildDebtStrategy(userId, p.extraPerMonth);
   return (
     <div className="card p-4">
       <div className="flex items-baseline gap-2">

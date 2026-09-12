@@ -89,7 +89,7 @@ const monthStart = (month: string) => `${month}-01`;
 
 // --- Ví ----------------------------------------------------------------------
 
-export function getWallets(): Wallet[] {
+export function getWallets(userId: number): Wallet[] {
   const today = todayVN();
   const rows = getDb()
     .prepare(
@@ -100,9 +100,9 @@ export function getWallets(): Wallet[] {
                        FROM transactions t WHERE t.wallet_id = w.id), 0)
            + COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE t.to_wallet_id = w.id), 0) AS balance,
          (SELECT COUNT(*) FROM transactions t WHERE t.wallet_id = w.id OR t.to_wallet_id = w.id) AS txCount
-       FROM wallets w ORDER BY w.sort, w.id`,
+       FROM wallets w WHERE w.user_id = ? ORDER BY w.sort, w.id`,
     )
-    .all() as (Omit<Wallet, "isDefault" | "used" | "available" | "nextPaymentDate"> & { isDefault: number })[];
+    .all(userId) as (Omit<Wallet, "isDefault" | "used" | "available" | "nextPaymentDate"> & { isDefault: number })[];
   return rows.map((r) => {
     const isCredit = r.kind === "credit";
     const used = isCredit ? Math.max(0, -r.balance) : 0;
@@ -136,13 +136,14 @@ function nextCardPaymentDate(day: number | null, today: string): string | null {
   return thisMonth >= today ? thisMonth : onDay(shiftMonth(today.slice(0, 7), 1));
 }
 
-export function createWallet(input: WalletInput) {
+export function createWallet(userId: number, input: WalletInput) {
   const db = getDb();
-  const sort = (db.prepare("SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM wallets").get() as { s: number }).s;
+  const sort = (db.prepare("SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM wallets WHERE user_id = ?").get(userId) as { s: number }).s;
   db.prepare(
-    `INSERT INTO wallets (name, kind, aliases, color, initial_balance, sort, credit_limit, payment_day, monthly_payment)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO wallets (user_id, name, kind, aliases, color, initial_balance, sort, credit_limit, payment_day, monthly_payment)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
+    userId,
     input.name,
     input.kind,
     normalizeAliases(input.aliases),
@@ -166,16 +167,16 @@ function creditCols(input: WalletInput) {
 }
 
 /** Cập nhật ví; `balance` là số dư THỰC TẾ hiện tại → tự tính lại số dư ban đầu. */
-export function updateWallet(id: number, input: WalletInput) {
+export function updateWallet(userId: number, id: number, input: WalletInput) {
   const db = getDb();
   db.transaction(() => {
-    const current = getWallets().find((w) => w.id === id);
+    const current = getWallets(userId).find((w) => w.id === id);
     if (!current) throw new Error("Không tìm thấy ví");
     const cols = creditCols(input);
     db.prepare(
       `UPDATE wallets SET name = ?, kind = ?, aliases = ?, color = ?,
          initial_balance = initial_balance + ?, credit_limit = ?, payment_day = ?, monthly_payment = ?
-       WHERE id = ?`,
+       WHERE id = ? AND user_id = ?`,
     ).run(
       input.name,
       input.kind,
@@ -186,21 +187,22 @@ export function updateWallet(id: number, input: WalletInput) {
       cols.day,
       cols.monthly,
       id,
+      userId,
     );
   })();
 }
 
-export function setDefaultWallet(id: number) {
-  getDb().prepare("UPDATE wallets SET is_default = (id = ?)").run(id);
+export function setDefaultWallet(userId: number, id: number) {
+  getDb().prepare("UPDATE wallets SET is_default = (id = ?) WHERE user_id = ?").run(id, userId);
 }
 
-export function deleteWallet(id: number) {
+export function deleteWallet(userId: number, id: number) {
   const db = getDb();
   const used = db
-    .prepare("SELECT COUNT(*) AS n FROM transactions WHERE wallet_id = ? OR to_wallet_id = ?")
-    .get(id, id) as { n: number };
+    .prepare("SELECT COUNT(*) AS n FROM transactions WHERE user_id = ? AND (wallet_id = ? OR to_wallet_id = ?)")
+    .get(userId, id, id) as { n: number };
   if (used.n > 0) throw new Error("Ví đã có giao dịch, không xóa được");
-  db.prepare("DELETE FROM wallets WHERE id = ?").run(id);
+  db.prepare("DELETE FROM wallets WHERE id = ? AND user_id = ?").run(id, userId);
 }
 
 function normalizeAliases(aliases: string): string {
@@ -211,27 +213,30 @@ function normalizeAliases(aliases: string): string {
 
 // --- Danh mục & từ khóa --------------------------------------------------------
 
-export function getCategories(): Category[] {
+export function getCategories(userId: number): Category[] {
   const rows = getDb()
-    .prepare("SELECT id, name, type, icon, is_fixed AS isFixed FROM categories ORDER BY type DESC, sort, id")
-    .all() as (Omit<Category, "isFixed"> & { isFixed: number })[];
+    .prepare(
+      "SELECT id, name, type, icon, is_fixed AS isFixed FROM categories WHERE user_id = ? ORDER BY type DESC, sort, id",
+    )
+    .all(userId) as (Omit<Category, "isFixed"> & { isFixed: number })[];
   return rows.map((r) => ({ ...r, isFixed: r.isFixed === 1 }));
 }
 
-export function setCategoryFixed(id: number, isFixed: boolean) {
-  getDb().prepare("UPDATE categories SET is_fixed = ? WHERE id = ?").run(isFixed ? 1 : 0, id);
+export function setCategoryFixed(userId: number, id: number, isFixed: boolean) {
+  getDb().prepare("UPDATE categories SET is_fixed = ? WHERE id = ? AND user_id = ?").run(isFixed ? 1 : 0, id, userId);
 }
 
-export function getKeywords(): Keyword[] {
+export function getKeywords(userId: number): Keyword[] {
   return getDb()
-    .prepare("SELECT id, keyword, category_id AS categoryId FROM keywords ORDER BY keyword")
-    .all() as Keyword[];
+    .prepare("SELECT id, keyword, category_id AS categoryId FROM keywords WHERE user_id = ? ORDER BY keyword")
+    .all(userId) as Keyword[];
 }
 
-export function createCategory(input: { name: string; type: CategoryType; icon: string }) {
+export function createCategory(userId: number, input: { name: string; type: CategoryType; icon: string }) {
   const db = getDb();
-  const sort = (db.prepare("SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM categories").get() as { s: number }).s;
-  db.prepare("INSERT INTO categories (name, type, icon, sort) VALUES (?, ?, ?, ?)").run(
+  const sort = (db.prepare("SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM categories WHERE user_id = ?").get(userId) as { s: number }).s;
+  db.prepare("INSERT INTO categories (user_id, name, type, icon, sort) VALUES (?, ?, ?, ?, ?)").run(
+    userId,
     input.name,
     input.type,
     input.icon,
@@ -239,42 +244,45 @@ export function createCategory(input: { name: string; type: CategoryType; icon: 
   );
 }
 
-export function updateCategory(id: number, input: { name: string; icon: string }) {
-  getDb().prepare("UPDATE categories SET name = ?, icon = ? WHERE id = ?").run(input.name, input.icon, id);
+export function updateCategory(userId: number, id: number, input: { name: string; icon: string }) {
+  getDb()
+    .prepare("UPDATE categories SET name = ?, icon = ? WHERE id = ? AND user_id = ?")
+    .run(input.name, input.icon, id, userId);
 }
 
-export function deleteCategory(id: number) {
-  getDb().prepare("DELETE FROM categories WHERE id = ?").run(id);
+export function deleteCategory(userId: number, id: number) {
+  getDb().prepare("DELETE FROM categories WHERE id = ? AND user_id = ?").run(id, userId);
 }
 
-export function upsertKeyword(keyword: string, categoryId: number) {
+export function upsertKeyword(userId: number, keyword: string, categoryId: number) {
   const k = fold(keyword.normalize("NFC")).trim().replace(/\s+/g, " ");
   if (!k) return;
   getDb()
     .prepare(
-      "INSERT INTO keywords (keyword, category_id) VALUES (?, ?) ON CONFLICT(keyword) DO UPDATE SET category_id = excluded.category_id",
+      `INSERT INTO keywords (user_id, keyword, category_id) VALUES (?, ?, ?)
+       ON CONFLICT(user_id, keyword) DO UPDATE SET category_id = excluded.category_id`,
     )
-    .run(k, categoryId);
+    .run(userId, k, categoryId);
 }
 
-export function deleteKeyword(id: number) {
-  getDb().prepare("DELETE FROM keywords WHERE id = ?").run(id);
+export function deleteKeyword(userId: number, id: number) {
+  getDb().prepare("DELETE FROM keywords WHERE id = ? AND user_id = ?").run(id, userId);
 }
 
 /**
  * Học từ khóa từ ghi chú ngắn: lần sau gõ lại ghi chú đó sẽ tự ra đúng danh mục.
  * Chỉ học khi từ khóa hiện có không cho ra đúng danh mục đã chọn.
  */
-export function learnKeyword(note: string, categoryId: number) {
+export function learnKeyword(userId: number, note: string, categoryId: number) {
   const phrase = fold(note.normalize("NFC")).trim().replace(/\s+/g, " ");
   const words = phrase.split(" ").length;
   if (phrase.length < 2 || words > 4 || /^[\d\s.,]+$/.test(phrase)) return;
 
-  const matches = getKeywords()
+  const matches = getKeywords(userId)
     .filter((k) => wordRegex(k.keyword, "").test(phrase))
     .sort((a, b) => b.keyword.length - a.keyword.length);
   if (matches[0]?.categoryId === categoryId) return;
-  upsertKeyword(phrase, categoryId);
+  upsertKeyword(userId, phrase, categoryId);
 }
 
 // --- Giao dịch -----------------------------------------------------------------
@@ -314,9 +322,9 @@ const ORDER_BY = {
   amount: "t.amount DESC, t.occurred_on DESC",
 } as const;
 
-export function listTransactions(filter: TxFilter = {}): Tx[] {
-  const where: string[] = [];
-  const params: (string | number)[] = [];
+export function listTransactions(userId: number, filter: TxFilter = {}): Tx[] {
+  const where: string[] = ["t.user_id = ?"];
+  const params: (string | number)[] = [userId];
   if (filter.month) {
     where.push("t.occurred_on >= ? AND t.occurred_on < ?");
     params.push(monthStart(filter.month), monthStart(shiftMonth(filter.month, 1)));
@@ -354,42 +362,44 @@ export function listTransactions(filter: TxFilter = {}): Tx[] {
     );
     params.push(like, like, like);
   }
-  const sql = `${TX_SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+  const sql = `${TX_SELECT} WHERE ${where.join(" AND ")}
     ORDER BY ${ORDER_BY[filter.order ?? "date"]} LIMIT ?`;
   params.push(filter.limit ?? 1000);
   return getDb().prepare(sql).all(...params) as Tx[];
 }
 
-export function getTransaction(id: number): Tx | null {
-  return (getDb().prepare(`${TX_SELECT} WHERE t.id = ?`).get(id) as Tx | undefined) ?? null;
+export function getTransaction(userId: number, id: number): Tx | null {
+  return (
+    (getDb().prepare(`${TX_SELECT} WHERE t.id = ? AND t.user_id = ?`).get(id, userId) as Tx | undefined) ?? null
+  );
 }
 
-export function insertTransaction(input: TxInput): number {
+export function insertTransaction(userId: number, input: TxInput): number {
   const r = getDb()
     .prepare(
-      `INSERT INTO transactions (type, amount, wallet_id, to_wallet_id, category_id, note, occurred_on, debt_id, recurring_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO transactions (user_id, type, amount, wallet_id, to_wallet_id, category_id, note, occurred_on, debt_id, recurring_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(...txParams(input));
+    .run(userId, ...txParams(input));
   return Number(r.lastInsertRowid);
 }
 
-export function updateTransaction(id: number, input: TxInput) {
+export function updateTransaction(userId: number, id: number, input: TxInput) {
   getDb()
     .prepare(
       `UPDATE transactions SET type = ?, amount = ?, wallet_id = ?, to_wallet_id = ?, category_id = ?,
-         note = ?, occurred_on = ?, debt_id = ?, recurring_id = ? WHERE id = ?`,
+         note = ?, occurred_on = ?, debt_id = ?, recurring_id = ? WHERE id = ? AND user_id = ?`,
     )
-    .run(...txParams(input), id);
+    .run(...txParams(input), id, userId);
 }
 
-export function deleteTransaction(id: number) {
+export function deleteTransaction(userId: number, id: number) {
   const db = getDb();
   db.transaction(() => {
-    const row = db.prepare("SELECT debt_id AS debtId FROM transactions WHERE id = ?").get(id) as
+    const row = db.prepare("SELECT debt_id AS debtId FROM transactions WHERE id = ? AND user_id = ?").get(id, userId) as
       | { debtId: number | null }
       | undefined;
-    db.prepare("DELETE FROM transactions WHERE id = ?").run(id);
+    db.prepare("DELETE FROM transactions WHERE id = ? AND user_id = ?").run(id, userId);
     // Khoản nợ tạo từ ô nhập nhanh mà không còn giao dịch nào → xóa luôn (vd. bấm Hoàn tác)
     if (row?.debtId) {
       db.prepare(
@@ -455,7 +465,7 @@ export interface RecurringInput {
   note: string;
 }
 
-export function getRecurring(): Recurring[] {
+export function getRecurring(userId: number): Recurring[] {
   const today = todayVN();
   const month = today.slice(0, 7);
   const rows = getDb()
@@ -469,9 +479,10 @@ export function getRecurring(): Recurring[] {
        FROM recurring r
        LEFT JOIN categories c ON c.id = r.category_id
        LEFT JOIN wallets w ON w.id = r.wallet_id
+       WHERE r.user_id = @userId
        ORDER BY r.active DESC, r.day_of_month IS NULL, r.day_of_month, r.id`,
     )
-    .all({ month }) as (Omit<Recurring, "active" | "doneThisMonth" | "nextDate" | "overdue"> & {
+    .all({ month, userId }) as (Omit<Recurring, "active" | "doneThisMonth" | "nextDate" | "overdue"> & {
     active: number;
     doneThisMonth: number;
   })[];
@@ -495,10 +506,14 @@ export function getRecurring(): Recurring[] {
  * Tìm khoản định kỳ khớp với ghi chú (vd. "thanh toán tiền nhà" → "Tiền nhà"),
  * chỉ lấy khoản đúng loại (thu/chi), đang bật và chưa ghi trong tháng này.
  */
-export function findRecurringByNote(note: string, kind: "expense" | "income" = "expense"): number | null {
+export function findRecurringByNote(
+  userId: number,
+  note: string,
+  kind: "expense" | "income" = "expense",
+): number | null {
   const folded = fold(note.normalize("NFC"));
   if (!folded.trim()) return null;
-  const matches = getRecurring()
+  const matches = getRecurring(userId)
     .filter((r) => r.active && !r.doneThisMonth && r.kind === kind)
     .map((r) => ({ id: r.id, phrase: fold(r.name.normalize("NFC")).trim() }))
     .filter((r) => r.phrase && wordRegex(r.phrase, "").test(folded))
@@ -506,46 +521,54 @@ export function findRecurringByNote(note: string, kind: "expense" | "income" = "
   return matches[0]?.id ?? null;
 }
 
-export function createRecurring(input: RecurringInput) {
+export function createRecurring(userId: number, input: RecurringInput) {
   const db = getDb();
-  const sort = (db.prepare("SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM recurring").get() as { s: number }).s;
+  const sort = (db.prepare("SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM recurring WHERE user_id = ?").get(userId) as { s: number }).s;
   db.prepare(
-    `INSERT INTO recurring (name, kind, amount, amount_usd, category_id, wallet_id, day_of_month, note, sort)
-     VALUES (@name, @kind, @amount, @amountUsd, @categoryId, @walletId, @dayOfMonth, @note, @sort)`,
-  ).run({ ...input, sort });
+    `INSERT INTO recurring (user_id, name, kind, amount, amount_usd, category_id, wallet_id, day_of_month, note, sort)
+     VALUES (@userId, @name, @kind, @amount, @amountUsd, @categoryId, @walletId, @dayOfMonth, @note, @sort)`,
+  ).run({ ...input, sort, userId });
 }
 
-export function updateRecurring(id: number, input: RecurringInput) {
+export function updateRecurring(userId: number, id: number, input: RecurringInput) {
   getDb()
     .prepare(
       `UPDATE recurring SET name = @name, kind = @kind, amount = @amount, amount_usd = @amountUsd,
-         category_id = @categoryId, wallet_id = @walletId, day_of_month = @dayOfMonth, note = @note WHERE id = @id`,
+         category_id = @categoryId, wallet_id = @walletId, day_of_month = @dayOfMonth, note = @note
+       WHERE id = @id AND user_id = @userId`,
     )
-    .run({ ...input, id });
+    .run({ ...input, id, userId });
 }
 
-export function setRecurringActive(id: number, active: boolean) {
-  getDb().prepare("UPDATE recurring SET active = ? WHERE id = ?").run(active ? 1 : 0, id);
+export function setRecurringActive(userId: number, id: number, active: boolean) {
+  getDb().prepare("UPDATE recurring SET active = ? WHERE id = ? AND user_id = ?").run(active ? 1 : 0, id, userId);
 }
 
-export function deleteRecurring(id: number) {
-  getDb().prepare("DELETE FROM recurring WHERE id = ?").run(id);
+export function deleteRecurring(userId: number, id: number) {
+  getDb().prepare("DELETE FROM recurring WHERE id = ? AND user_id = ?").run(id, userId);
 }
 
 // --- Cài đặt -------------------------------------------------------------------
 
-export function getSetting(key: string): string | null {
-  return (getDb().prepare("SELECT value FROM settings WHERE key = ?").pluck().get(key) as string | undefined) ?? null;
+export function getSetting(userId: number, key: string): string | null {
+  return (
+    (getDb().prepare("SELECT value FROM settings WHERE user_id = ? AND key = ?").pluck().get(userId, key) as
+      | string
+      | undefined) ?? null
+  );
 }
 
-export function setSetting(key: string, value: string) {
+export function setSetting(userId: number, key: string, value: string) {
   getDb()
-    .prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-    .run(key, value);
+    .prepare(
+      `INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)
+       ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`,
+    )
+    .run(userId, key, value);
 }
 
-export function getNumberSetting(key: string): number | null {
-  const raw = getSetting(key);
+export function getNumberSetting(userId: number, key: string): number | null {
+  const raw = getSetting(userId, key);
   const n = raw === null ? NaN : Number(raw);
   return Number.isFinite(n) ? n : null;
 }
@@ -594,7 +617,7 @@ export interface DebtInput {
   createdOn: string;
 }
 
-export function getDebts(): Debt[] {
+export function getDebts(userId: number): Debt[] {
   const today = todayVN();
   const month = today.slice(0, 7);
   const rows = getDb()
@@ -611,10 +634,11 @@ export function getDebts(): Debt[] {
                                 AND t.occurred_on >= @monthStart THEN t.amount END), 0) AS paidThisMonth,
          MAX(t.occurred_on) AS lastActivity
        FROM debts d LEFT JOIN transactions t ON t.debt_id = d.id
+       WHERE d.user_id = @userId
        GROUP BY d.id
        ORDER BY d.closed, d.due_date IS NULL, d.due_date, d.id`,
     )
-    .all({ monthStart: monthStart(month) }) as (Omit<
+    .all({ monthStart: monthStart(month), userId }) as (Omit<
     Debt,
     "closed" | "total" | "outstanding" | "isOpen" | "nextPaymentDate" | "paymentIsInterest" | "payoffAmount"
   > & {
@@ -666,60 +690,65 @@ function nextPaymentDate(
   return paidEnough || beforeTracking ? onDay(shiftMonth(today.slice(0, 7), 1)) : thisMonth;
 }
 
-export function getDebt(id: number): Debt | null {
-  return getDebts().find((d) => d.id === id) ?? null;
+export function getDebt(userId: number, id: number): Debt | null {
+  return getDebts(userId).find((d) => d.id === id) ?? null;
 }
 
-export function createDebt(input: DebtInput): number {
+export function createDebt(userId: number, input: DebtInput): number {
   const r = getDb()
     .prepare(
-      `INSERT INTO debts (direction, name, aliases, opening_amount, interest_rate, monthly_payment, payment_day,
+      `INSERT INTO debts (user_id, direction, name, aliases, opening_amount, interest_rate, monthly_payment, payment_day,
          due_date, note, created_on, payment_is_interest)
-       VALUES (@direction, @name, @aliases, @openingAmount, @interestRate, @monthlyPayment, @paymentDay,
+       VALUES (@userId, @direction, @name, @aliases, @openingAmount, @interestRate, @monthlyPayment, @paymentDay,
          @dueDate, @note, @createdOn, @paymentIsInterest)`,
     )
     .run({
       ...input,
+      userId,
       aliases: normalizeAliases(input.aliases),
       paymentIsInterest: input.paymentIsInterest ? 1 : 0,
     });
   return Number(r.lastInsertRowid);
 }
 
-export function updateDebt(id: number, input: Omit<DebtInput, "direction" | "createdOn">) {
+export function updateDebt(userId: number, id: number, input: Omit<DebtInput, "direction" | "createdOn">) {
   getDb()
     .prepare(
       `UPDATE debts SET name = @name, aliases = @aliases, opening_amount = @openingAmount,
          interest_rate = @interestRate, monthly_payment = @monthlyPayment, payment_day = @paymentDay,
          due_date = @dueDate, note = @note, payment_is_interest = @paymentIsInterest
-       WHERE id = @id`,
+       WHERE id = @id AND user_id = @userId`,
     )
     .run({
       ...input,
       aliases: normalizeAliases(input.aliases),
       paymentIsInterest: input.paymentIsInterest ? 1 : 0,
       id,
+      userId,
     });
 }
 
-export function setDebtClosed(id: number, closed: boolean) {
-  getDb().prepare("UPDATE debts SET closed = ? WHERE id = ?").run(closed ? 1 : 0, id);
+export function setDebtClosed(userId: number, id: number, closed: boolean) {
+  getDb().prepare("UPDATE debts SET closed = ? WHERE id = ? AND user_id = ?").run(closed ? 1 : 0, id, userId);
 }
 
 /**
  * Tất toán khoản nợ: ghi trả gốc (gắn khoản nợ) và tiền lãi kỳ này (khoản chi "Lãi vay").
  * Trả cho khoản mình đi vay thì tiền ra khỏi ví; thu nợ người khác thì tiền vào ví.
  */
-export function payOffDebt(input: {
-  debtId: number;
-  walletId: number;
-  date: string;
-  principal: number;
-  interest: number;
-}): { principalTxId: number | null; interestTxId: number | null } {
+export function payOffDebt(
+  userId: number,
+  input: {
+    debtId: number;
+    walletId: number;
+    date: string;
+    principal: number;
+    interest: number;
+  },
+): { principalTxId: number | null; interestTxId: number | null } {
   const db = getDb();
   return db.transaction(() => {
-    const debt = getDebt(input.debtId);
+    const debt = getDebt(userId, input.debtId);
     if (!debt) throw new Error("Không tìm thấy khoản nợ");
     if (input.principal < 0 || input.interest < 0) throw new Error("Số tiền không hợp lệ");
     if (input.principal > debt.outstanding) throw new Error("Số tiền trả gốc lớn hơn số còn nợ");
@@ -727,7 +756,7 @@ export function payOffDebt(input: {
 
     let principalTxId: number | null = null;
     if (input.principal > 0) {
-      principalTxId = insertTransaction({
+      principalTxId = insertTransaction(userId, {
         type: debt.direction === "borrow" ? "expense" : "income",
         amount: input.principal,
         walletId: input.walletId,
@@ -742,10 +771,10 @@ export function payOffDebt(input: {
     let interestTxId: number | null = null;
     if (input.interest > 0) {
       const category = db
-        .prepare("SELECT id FROM categories WHERE name = 'Lãi vay' AND type = 'expense'")
+        .prepare("SELECT id FROM categories WHERE user_id = ? AND name = 'Lãi vay' AND type = 'expense'")
         .pluck()
-        .get() as number | undefined;
-      interestTxId = insertTransaction({
+        .get(userId) as number | undefined;
+      interestTxId = insertTransaction(userId, {
         type: "expense",
         amount: input.interest,
         walletId: input.walletId,
@@ -760,11 +789,11 @@ export function payOffDebt(input: {
 }
 
 /** Xóa khoản nợ cùng các giao dịch gắn với nó (để số dư ví không bị lệch). */
-export function deleteDebt(id: number) {
+export function deleteDebt(userId: number, id: number) {
   const db = getDb();
   db.transaction(() => {
-    db.prepare("DELETE FROM transactions WHERE debt_id = ?").run(id);
-    db.prepare("DELETE FROM debts WHERE id = ?").run(id);
+    db.prepare("DELETE FROM transactions WHERE debt_id = ? AND user_id = ?").run(id, userId);
+    db.prepare("DELETE FROM debts WHERE id = ? AND user_id = ?").run(id, userId);
   })();
 }
 
@@ -780,7 +809,7 @@ export interface MonthSummary {
   daily: { date: string; total: number }[];
 }
 
-export function getMonthSummary(month: string): MonthSummary {
+export function getMonthSummary(userId: number, month: string): MonthSummary {
   const db = getDb();
   const start = monthStart(month);
   const end = monthStart(shiftMonth(month, 1));
@@ -798,16 +827,18 @@ export function getMonthSummary(month: string): MonthSummary {
   const totals = db
     .prepare(
       `SELECT type, SUM(amount) AS total FROM transactions
-       WHERE occurred_on >= ? AND occurred_on < ? AND type != 'transfer' AND debt_id IS NULL GROUP BY type`,
+       WHERE user_id = ? AND occurred_on >= ? AND occurred_on < ? AND type != 'transfer' AND debt_id IS NULL
+       GROUP BY type`,
     )
-    .all(start, end) as { type: TxType; total: number }[];
+    .all(userId, start, end) as { type: TxType; total: number }[];
 
   const prevExpense = (
     db
       .prepare(
-        "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE type = 'expense' AND debt_id IS NULL AND occurred_on >= ? AND occurred_on < ?",
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM transactions
+         WHERE user_id = ? AND type = 'expense' AND debt_id IS NULL AND occurred_on >= ? AND occurred_on < ?`,
       )
-      .get(prevStart, prevCut) as { total: number }
+      .get(userId, prevStart, prevCut) as { total: number }
   ).total;
 
   const byCategory = db
@@ -816,19 +847,21 @@ export function getMonthSummary(month: string): MonthSummary {
          SUM(CASE WHEN t.occurred_on >= @start THEN t.amount ELSE 0 END) AS total,
          SUM(CASE WHEN t.occurred_on < @prevCut THEN t.amount ELSE 0 END) AS prevTotal
        FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
-       WHERE t.type = 'expense' AND t.debt_id IS NULL AND t.occurred_on >= @prevStart AND t.occurred_on < @end
+       WHERE t.user_id = @userId AND t.type = 'expense' AND t.debt_id IS NULL
+         AND t.occurred_on >= @prevStart AND t.occurred_on < @end
        GROUP BY t.category_id
        HAVING total > 0
        ORDER BY total DESC`,
     )
-    .all({ start, end, prevStart, prevCut }) as MonthSummary["byCategory"];
+    .all({ start, end, prevStart, prevCut, userId }) as MonthSummary["byCategory"];
 
   const daily = db
     .prepare(
       `SELECT occurred_on AS date, SUM(amount) AS total FROM transactions
-       WHERE type = 'expense' AND debt_id IS NULL AND occurred_on >= ? AND occurred_on < ? GROUP BY occurred_on`,
+       WHERE user_id = ? AND type = 'expense' AND debt_id IS NULL AND occurred_on >= ? AND occurred_on < ?
+       GROUP BY occurred_on`,
     )
-    .all(start, end) as MonthSummary["daily"];
+    .all(userId, start, end) as MonthSummary["daily"];
 
   return {
     income: totals.find((t) => t.type === "income")?.total ?? 0,
@@ -843,9 +876,9 @@ export function getMonthSummary(month: string): MonthSummary {
 // --- Dữ liệu cho form nhập -----------------------------------------------------
 
 /** Dữ liệu tối thiểu gửi xuống client để đọc câu nhập nhanh. `withDebtId`: kèm cả khoản nợ đã đóng (khi sửa). */
-export function getEditorContext(withDebtId?: number | null) {
+export function getEditorContext(userId: number, withDebtId?: number | null) {
   return {
-    wallets: getWallets().map(({ id, name, kind, aliases, color, isDefault }) => ({
+    wallets: getWallets(userId).map(({ id, name, kind, aliases, color, isDefault }) => ({
       id,
       name,
       kind,
@@ -853,9 +886,9 @@ export function getEditorContext(withDebtId?: number | null) {
       color,
       isDefault,
     })),
-    categories: getCategories(),
-    keywords: getKeywords().map(({ keyword, categoryId }) => ({ keyword, categoryId })),
-    debts: getDebts()
+    categories: getCategories(userId),
+    keywords: getKeywords(userId).map(({ keyword, categoryId }) => ({ keyword, categoryId })),
+    debts: getDebts(userId)
       .filter((d) => d.isOpen || d.id === withDebtId)
       .map(({ id, name, aliases, direction, outstanding, monthlyPayment, payoffAmount, paymentIsInterest }) => ({
         id,

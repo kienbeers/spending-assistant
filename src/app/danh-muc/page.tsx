@@ -13,15 +13,17 @@ import {
 import { ConfirmButton } from "@/components/confirm-button";
 import { getCategories, getKeywords } from "@/lib/repo";
 import type { CategoryType } from "@/lib/seed";
+import { requireUserId } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Danh mục" };
 
 export default async function CategoriesPage({ searchParams }: PageProps<"/danh-muc">) {
   await connection();
+  const userId = await requireUserId();
   const { loai } = await searchParams;
   const type: CategoryType = loai === "income" ? "income" : "expense";
-  const categories = getCategories().filter((c) => c.type === type);
-  const keywords = getKeywords();
+  const categories = getCategories(userId).filter((c) => c.type === type);
+  const keywords = getKeywords(userId);
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">

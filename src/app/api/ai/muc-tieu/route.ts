@@ -5,6 +5,7 @@ import { buildDebtStrategy } from "@/lib/debt-plan";
 import { formatVND, todayVN } from "@/lib/format";
 import { buildPlanFrame, getPlan, savePlanAi } from "@/lib/planning";
 import { getWallets } from "@/lib/repo";
+import { apiUserId, UNAUTHORIZED } from "@/lib/session";
 
 const bodySchema = z.object({ planId: z.coerce.number().int().positive() });
 
@@ -12,10 +13,10 @@ const m = (n: number) => formatVND(n);
 const monthVN = (month: string) => `${Number(month.slice(5, 7))}/${month.slice(0, 4)}`;
 
 /** Số liệu cho AI: tất cả đều do code tính */
-function buildGoalFacts(extraPerMonth: number): string {
-  const frame = buildPlanFrame(todayVN().slice(0, 7));
-  const s = buildDebtStrategy(extraPerMonth);
-  const cash = getWallets().filter((w) => w.kind !== "credit").reduce((t, w) => t + w.balance, 0);
+function buildGoalFacts(userId: number, extraPerMonth: number): string {
+  const frame = buildPlanFrame(userId, todayVN().slice(0, 7));
+  const s = buildDebtStrategy(userId, extraPerMonth);
+  const cash = getWallets(userId).filter((w) => w.kind !== "credit").reduce((t, w) => t + w.balance, 0);
   const lines: string[] = [];
 
   lines.push("# Thu nhập & nghĩa vụ mỗi tháng");
@@ -60,16 +61,18 @@ function buildGoalFacts(extraPerMonth: number): string {
 
 /** POST /api/ai/muc-tieu → định hướng AI cho mục tiêu (trả về dần) */
 export async function POST(request: Request) {
+  const userId = await apiUserId();
+  if (!userId) return UNAUTHORIZED();
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "Yêu cầu không hợp lệ" }, { status: 400 });
-  const plan = getPlan(parsed.data.planId);
+  const plan = getPlan(userId, parsed.data.planId);
   if (!plan) return Response.json({ error: "Không tìm thấy mục tiêu" }, { status: 404 });
 
   const ai = getAi();
   const status = await ai.check();
   if (!status.ok) return Response.json({ error: status.message }, { status: 503 });
 
-  const facts = buildGoalFacts(plan.extraPerMonth);
+  const facts = buildGoalFacts(userId, plan.extraPerMonth);
   const prompt = goalPrompt(
     {
       title: plan.title,
@@ -89,7 +92,7 @@ export async function POST(request: Request) {
           full += chunk;
           controller.enqueue(encoder.encode(chunk));
         }
-        if (full.trim()) savePlanAi(plan.id, full.trim(), `${ai.name}:${ai.model}`);
+        if (full.trim()) savePlanAi(userId, plan.id, full.trim(), `${ai.name}:${ai.model}`);
       } catch (e) {
         controller.enqueue(encoder.encode(`\n\n⚠️ Lỗi AI: ${e instanceof Error ? e.message : "không rõ"}`));
       } finally {

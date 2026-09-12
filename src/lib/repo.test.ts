@@ -7,6 +7,9 @@ import { beforeAll, describe, expect, it } from "vitest";
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chi-tieu-test-"));
 process.env.DB_PATH = path.join(dir, "test.db");
 
+// Tài khoản mặc định trong DB test (bản ghi users id = 1)
+const U = 1;
+
 let repo: typeof import("./repo");
 let parse: typeof import("./quick-parse").quickParse;
 
@@ -15,33 +18,33 @@ beforeAll(async () => {
   parse = (await import("./quick-parse")).quickParse;
 });
 
-const wallet = (name: string) => repo.getWallets().find((w) => w.name === name)!;
-const category = (name: string) => repo.getCategories().find((c) => c.name === name)!;
+const wallet = (name: string) => repo.getWallets(U).find((w) => w.name === name)!;
+const category = (name: string) => repo.getCategories(U).find((c) => c.name === name)!;
 
 describe("repo", () => {
   it("khởi tạo ví & danh mục mẫu", () => {
-    expect(repo.getWallets().map((w) => w.name)).toEqual(["MB Bank", "SHB", "Ví MoMo", "Tiền mặt"]);
-    expect(repo.getKeywords().length).toBeGreaterThan(50);
+    expect(repo.getWallets(U).map((w) => w.name)).toEqual(["MB Bank", "SHB", "Ví MoMo", "Tiền mặt"]);
+    expect(repo.getKeywords(U).length).toBeGreaterThan(50);
   });
 
   it("số dư tính theo thu/chi/chuyển ví và chỉnh được về số thực tế", () => {
     const mb = wallet("MB Bank").id;
     const momo = wallet("Ví MoMo").id;
     const base = { note: "", categoryId: null, toWalletId: null, date: "2026-09-10" };
-    repo.insertTransaction({ ...base, type: "income", amount: 10_000_000, walletId: mb });
-    repo.insertTransaction({ ...base, type: "expense", amount: 200_000, walletId: mb });
-    repo.insertTransaction({ ...base, type: "transfer", amount: 1_000_000, walletId: mb, toWalletId: momo });
+    repo.insertTransaction(U, { ...base, type: "income", amount: 10_000_000, walletId: mb });
+    repo.insertTransaction(U, { ...base, type: "expense", amount: 200_000, walletId: mb });
+    repo.insertTransaction(U, { ...base, type: "transfer", amount: 1_000_000, walletId: mb, toWalletId: momo });
 
     expect(wallet("MB Bank").balance).toBe(8_800_000);
     expect(wallet("Ví MoMo").balance).toBe(1_000_000);
 
     const w = wallet("MB Bank");
-    repo.updateWallet(w.id, { name: w.name, kind: w.kind, aliases: w.aliases, color: w.color, balance: 9_000_000 });
+    repo.updateWallet(U, w.id, { name: w.name, kind: w.kind, aliases: w.aliases, color: w.color, balance: 9_000_000 });
     expect(wallet("MB Bank").balance).toBe(9_000_000);
   });
 
   it("chuyển ví không tính vào thu/chi của tháng", () => {
-    const s = repo.getMonthSummary("2026-09");
+    const s = repo.getMonthSummary(U, "2026-09");
     expect(s.income).toBe(10_000_000);
     expect(s.expense).toBe(200_000);
     expect(s.byCategory).toEqual([
@@ -50,27 +53,27 @@ describe("repo", () => {
   });
 
   it("tự học từ khóa từ ghi chú ngắn", () => {
-    const ctx = () => ({ today: "2026-09-11", ...repo.getEditorContext() });
+    const ctx = () => ({ today: "2026-09-11", ...repo.getEditorContext(U) });
     const target = category("Sức khỏe").id;
     expect(parse("cắt tóc 80k", ctx()).categoryId).toBeNull();
 
-    repo.learnKeyword("cắt tóc", target);
+    repo.learnKeyword(U, "cắt tóc", target);
     expect(parse("cắt tóc 100k", ctx()).categoryId).toBe(target);
 
     // Đã khớp đúng danh mục thì không thêm từ khóa trùng lặp
-    const before = repo.getKeywords().length;
-    repo.learnKeyword("cắt tóc", target);
-    expect(repo.getKeywords().length).toBe(before);
+    const before = repo.getKeywords(U).length;
+    repo.learnKeyword(U, "cắt tóc", target);
+    expect(repo.getKeywords(U).length).toBe(before);
 
     // Sửa lại sang danh mục khác → từ khóa được cập nhật
     const other = category("Khác").id;
-    repo.learnKeyword("cắt tóc", other);
+    repo.learnKeyword(U, "cắt tóc", other);
     expect(parse("cắt tóc 100k", ctx()).categoryId).toBe(other);
   });
 
   it("tìm kiếm không dấu", () => {
     const cash = wallet("Tiền mặt").id;
-    repo.insertTransaction({
+    repo.insertTransaction(U, {
       type: "expense",
       amount: 50_000,
       walletId: cash,
@@ -79,16 +82,16 @@ describe("repo", () => {
       note: "Bánh mì Huỳnh Hoa",
       date: "2026-09-11",
     });
-    expect(repo.listTransactions({ q: "banh mi" }).map((t) => t.note)).toEqual(["Bánh mì Huỳnh Hoa"]);
-    expect(repo.listTransactions({ q: "HUỲNH" })).toHaveLength(1);
+    expect(repo.listTransactions(U, { q: "banh mi" }).map((t) => t.note)).toEqual(["Bánh mì Huỳnh Hoa"]);
+    expect(repo.listTransactions(U, { q: "HUỲNH" })).toHaveLength(1);
   });
 
   it("nợ: tính số còn nợ, không tính vào thu/chi, hoàn tác xóa khoản nợ rỗng", async () => {
     const shb = wallet("SHB").id;
-    const before = repo.getMonthSummary("2026-09");
+    const before = repo.getMonthSummary(U, "2026-09");
     const shbBefore = wallet("SHB").balance;
 
-    const debtId = repo.createDebt({
+    const debtId = repo.createDebt(U, {
       direction: "lend",
       name: "Nam",
       aliases: "",
@@ -101,19 +104,19 @@ describe("repo", () => {
       createdOn: "2026-09-05",
     });
     const base = { walletId: shb, toWalletId: null, categoryId: null, note: "", debtId };
-    repo.insertTransaction({ ...base, type: "expense", amount: 1_000_000, date: "2026-09-05" }); // cho vay
-    const collectId = repo.insertTransaction({ ...base, type: "income", amount: 300_000, date: "2026-09-08" }); // thu nợ
+    repo.insertTransaction(U, { ...base, type: "expense", amount: 1_000_000, date: "2026-09-05" }); // cho vay
+    const collectId = repo.insertTransaction(U, { ...base, type: "income", amount: 300_000, date: "2026-09-08" }); // thu nợ
 
-    const debt = repo.getDebt(debtId)!;
+    const debt = repo.getDebt(U, debtId)!;
     expect(debt).toMatchObject({ total: 1_000_000, paid: 300_000, outstanding: 700_000, isOpen: true });
     expect(wallet("SHB").balance).toBe(shbBefore - 700_000);
 
-    const after = repo.getMonthSummary("2026-09");
+    const after = repo.getMonthSummary(U, "2026-09");
     expect(after.income).toBe(before.income);
     expect(after.expense).toBe(before.expense);
 
     // Khoản vay có trả góp: kỳ tới
-    const loan = repo.createDebt({
+    const loan = repo.createDebt(U, {
       direction: "borrow",
       name: "Trả góp xe",
       aliases: "xe",
@@ -125,13 +128,13 @@ describe("repo", () => {
       note: "",
       createdOn: "2026-01-15",
     });
-    expect(repo.getDebt(loan)!.nextPaymentDate).toMatch(/^\d{4}-\d{2}-15$/);
+    expect(repo.getDebt(U, loan)!.nextPaymentDate).toMatch(/^\d{4}-\d{2}-15$/);
 
     // Khoản ghi vào app hôm nay, ngày trả hằng tháng đã qua → kỳ tới là tháng sau, không phải quá hạn
     const today = (await import("./format")).todayVN();
     const { shiftMonth } = await import("./format");
     const yesterdayDay = Math.max(1, Number(today.slice(8, 10)) - 1);
-    const late = repo.createDebt({
+    const late = repo.createDebt(U, {
       direction: "borrow",
       name: "Vay ghi sau ngày trả",
       aliases: "",
@@ -143,20 +146,20 @@ describe("repo", () => {
       note: "",
       createdOn: today,
     });
-    expect(repo.getDebt(late)!.nextPaymentDate).toBe(
+    expect(repo.getDebt(U, late)!.nextPaymentDate).toBe(
       `${shiftMonth(today.slice(0, 7), 1)}-${String(yesterdayDay).padStart(2, "0")}`,
     );
 
     // Xóa hết giao dịch của khoản nợ tạo từ nhập nhanh → khoản nợ cũng bị xóa
-    repo.deleteTransaction(collectId);
-    const lendTx = repo.listTransactions({ debtId })[0];
-    repo.deleteTransaction(lendTx.id);
-    expect(repo.getDebt(debtId)).toBeNull();
-    expect(repo.getDebt(loan)).not.toBeNull(); // có nợ ban đầu → giữ lại
+    repo.deleteTransaction(U, collectId);
+    const lendTx = repo.listTransactions(U, { debtId })[0];
+    repo.deleteTransaction(U, lendTx.id);
+    expect(repo.getDebt(U, debtId)).toBeNull();
+    expect(repo.getDebt(U, loan)).not.toBeNull(); // có nợ ban đầu → giữ lại
   });
 
   it("không xóa được ví đã có giao dịch", () => {
-    expect(() => repo.deleteWallet(wallet("MB Bank").id)).toThrow();
+    expect(() => repo.deleteWallet(U, wallet("MB Bank").id)).toThrow();
   });
 });
 
@@ -165,10 +168,10 @@ describe("phân tích", () => {
     const { getCashflow, monthRange } = await import("./analytics");
     const { todayVN, shiftMonth } = await import("./format");
     const cur = todayVN().slice(0, 7);
-    const shb = repo.getWallets().find((w) => w.name === "SHB")!.id;
-    const nhaO = repo.getCategories().find((c) => c.name === "Nhà ở")!.id;
+    const shb = repo.getWallets(U).find((w) => w.name === "SHB")!.id;
+    const nhaO = repo.getCategories(U).find((c) => c.name === "Nhà ở")!.id;
     for (const month of [shiftMonth(cur, -2), shiftMonth(cur, -1), cur]) {
-      repo.insertTransaction({
+      repo.insertTransaction(U, {
         type: "expense",
         amount: 3_500_000,
         walletId: shb,
@@ -178,7 +181,7 @@ describe("phân tích", () => {
         date: `${month}-01`,
       });
     }
-    const trend = getCashflow(monthRange(cur, 3)).categoryTrends.find((t) => t.categoryId === nhaO)!;
+    const trend = getCashflow(U, monthRange(cur, 3)).categoryTrends.find((t) => t.categoryId === nhaO)!;
     expect(trend.reference).toBe(3_500_000);
     expect(trend.anomaly).toBe(false);
   });
@@ -186,7 +189,7 @@ describe("phân tích", () => {
 
 describe("thẻ tín dụng", () => {
   it("quẹt thẻ là chi tiêu và làm dư nợ tăng; thanh toán thẻ là chuyển tiền", () => {
-    repo.createWallet({
+    repo.createWallet(U, {
       name: "Thẻ FE",
       kind: "credit",
       aliases: "fe",
@@ -196,28 +199,28 @@ describe("thẻ tín dụng", () => {
       paymentDay: 1,
       monthlyPayment: null,
     });
-    const card = () => repo.getWallets().find((w) => w.name === "Thẻ FE")!;
+    const card = () => repo.getWallets(U).find((w) => w.name === "Thẻ FE")!;
     expect(card()).toMatchObject({ used: 17_015_336, available: 984_664 });
     expect(card().nextPaymentDate).toMatch(/^\d{4}-\d{2}-01$/);
 
-    const before = repo.getMonthSummary("2026-09").expense;
+    const before = repo.getMonthSummary(U, "2026-09").expense;
     // Quẹt thẻ mua đồ → tính là chi tiêu
-    repo.insertTransaction({
+    repo.insertTransaction(U, {
       type: "expense",
       amount: 500_000,
       walletId: card().id,
       toWalletId: null,
-      categoryId: repo.getCategories().find((c) => c.name === "Mua sắm")!.id,
+      categoryId: repo.getCategories(U).find((c) => c.name === "Mua sắm")!.id,
       note: "quẹt thẻ mua đồ",
       date: "2026-09-11",
     });
     expect(card().used).toBe(17_515_336);
     expect(card().available).toBe(484_664);
-    expect(repo.getMonthSummary("2026-09").expense).toBe(before + 500_000);
+    expect(repo.getMonthSummary(U, "2026-09").expense).toBe(before + 500_000);
 
     // Thanh toán thẻ = chuyển tiền từ ngân hàng sang thẻ, không tính vào chi tiêu
-    const shb = repo.getWallets().find((w) => w.name === "SHB")!;
-    repo.insertTransaction({
+    const shb = repo.getWallets(U).find((w) => w.name === "SHB")!;
+    repo.insertTransaction(U, {
       type: "transfer",
       amount: 2_000_000,
       walletId: shb.id,
@@ -227,14 +230,14 @@ describe("thẻ tín dụng", () => {
       date: "2026-09-11",
     });
     expect(card().used).toBe(15_515_336);
-    expect(repo.getMonthSummary("2026-09").expense).toBe(before + 500_000);
+    expect(repo.getMonthSummary(U, "2026-09").expense).toBe(before + 500_000);
   });
 });
 
 describe("trả hết khoản vay lãi ngoài", () => {
   it("ghi một lần: gốc trừ vào nợ, lãi vào danh mục Lãi vay", () => {
-    const cash = repo.getWallets().find((w) => w.kind === "cash")!;
-    const debtId = repo.createDebt({
+    const cash = repo.getWallets(U).find((w) => w.kind === "cash")!;
+    const debtId = repo.createDebt(U, {
       direction: "borrow",
       name: "Vay lãi ngoài test",
       aliases: "",
@@ -247,23 +250,23 @@ describe("trả hết khoản vay lãi ngoài", () => {
       paymentIsInterest: true,
       createdOn: "2026-09-01",
     });
-    expect(repo.getDebt(debtId)).toMatchObject({ outstanding: 10_000_000, payoffAmount: 10_500_000 });
+    expect(repo.getDebt(U, debtId)).toMatchObject({ outstanding: 10_000_000, payoffAmount: 10_500_000 });
 
-    const expenseBefore = repo.getMonthSummary("2026-09").expense;
-    repo.payOffDebt({ debtId, walletId: cash.id, date: "2026-09-11", principal: 10_000_000, interest: 500_000 });
+    const expenseBefore = repo.getMonthSummary(U, "2026-09").expense;
+    repo.payOffDebt(U, { debtId, walletId: cash.id, date: "2026-09-11", principal: 10_000_000, interest: 500_000 });
 
-    const debt = repo.getDebt(debtId)!;
+    const debt = repo.getDebt(U, debtId)!;
     expect(debt.outstanding).toBe(0);
     expect(debt.isOpen).toBe(false);
 
     // Chỉ tiền lãi được tính là chi tiêu; tiền gốc không phải chi tiêu
-    const summary = repo.getMonthSummary("2026-09");
+    const summary = repo.getMonthSummary(U, "2026-09");
     expect(summary.expense).toBe(expenseBefore + 500_000);
     expect(summary.byCategory.find((c) => c.name === "Lãi vay")?.total).toBe(500_000);
 
     // Trả quá số còn nợ thì báo lỗi
     expect(() =>
-      repo.payOffDebt({ debtId, walletId: cash.id, date: "2026-09-11", principal: 1, interest: 0 }),
+      repo.payOffDebt(U, { debtId, walletId: cash.id, date: "2026-09-11", principal: 1, interest: 0 }),
     ).toThrow();
   });
 });
@@ -272,9 +275,9 @@ describe("khoản định kỳ", () => {
   it("gắn giao dịch vào khoản định kỳ, gợi ý số lần trước, biết đã ghi trong tháng", async () => {
     const { todayVN } = await import("./format");
     const today = todayVN();
-    const cash = repo.getWallets().find((w) => w.kind === "cash")!;
-    const cat = repo.getCategories().find((c) => c.name === "Hóa đơn")!;
-    repo.createRecurring({
+    const cash = repo.getWallets(U).find((w) => w.kind === "cash")!;
+    const cat = repo.getCategories(U).find((c) => c.name === "Hóa đơn")!;
+    repo.createRecurring(U, {
       name: "Claude Pro",
       kind: "expense",
       amount: null,
@@ -284,11 +287,11 @@ describe("khoản định kỳ", () => {
       dayOfMonth: 5,
       note: "",
     });
-    const item = () => repo.getRecurring().find((r) => r.name === "Claude Pro")!;
+    const item = () => repo.getRecurring(U).find((r) => r.name === "Claude Pro")!;
     expect(item()).toMatchObject({ amountUsd: 22, dayOfMonth: 5, doneThisMonth: false, lastAmount: null });
     expect(item().nextDate).toMatch(/^\d{4}-\d{2}-05$/);
 
-    repo.insertTransaction({
+    repo.insertTransaction(U, {
       type: "expense",
       amount: 578_600,
       walletId: cash.id,
@@ -308,23 +311,23 @@ describe("khoản định kỳ", () => {
 describe("tự gắn khoản định kỳ theo ghi chú", () => {
   it("ghi chú chứa tên khoản định kỳ thì khớp, ghi rồi thì không khớp nữa", async () => {
     const { todayVN } = await import("./format");
-    const cash = repo.getWallets().find((w) => w.kind === "cash")!;
-    repo.createRecurring({
+    const cash = repo.getWallets(U).find((w) => w.kind === "cash")!;
+    repo.createRecurring(U, {
       name: "Tiền nhà",
       kind: "expense",
       amount: 2_175_000,
       amountUsd: null,
-      categoryId: repo.getCategories().find((c) => c.name === "Nhà ở")!.id,
+      categoryId: repo.getCategories(U).find((c) => c.name === "Nhà ở")!.id,
       walletId: null,
       dayOfMonth: 5,
       note: "",
     });
-    const id = repo.getRecurring().find((r) => r.name === "Tiền nhà")!.id;
+    const id = repo.getRecurring(U).find((r) => r.name === "Tiền nhà")!.id;
 
-    expect(repo.findRecurringByNote("thanh toán tiền nhà")).toBe(id);
-    expect(repo.findRecurringByNote("ăn trưa")).toBeNull();
+    expect(repo.findRecurringByNote(U, "thanh toán tiền nhà")).toBe(id);
+    expect(repo.findRecurringByNote(U, "ăn trưa")).toBeNull();
 
-    repo.insertTransaction({
+    repo.insertTransaction(U, {
       type: "expense",
       amount: 2_175_000,
       walletId: cash.id,
@@ -335,7 +338,7 @@ describe("tự gắn khoản định kỳ theo ghi chú", () => {
       recurringId: id,
     });
     // Đã ghi trong tháng → không gắn thêm lần nữa
-    expect(repo.findRecurringByNote("thanh toán tiền nhà")).toBeNull();
+    expect(repo.findRecurringByNote(U, "thanh toán tiền nhà")).toBeNull();
   });
 });
 
@@ -344,7 +347,7 @@ describe("khoản định kỳ quá hạn", () => {
     const { todayVN, shiftMonth } = await import("./format");
     const today = todayVN();
     const dayPassed = Math.max(1, Number(today.slice(8, 10)) - 1);
-    repo.createRecurring({
+    repo.createRecurring(U, {
       name: "Tiền nhà quá hạn",
       kind: "expense",
       amount: 2_000_000,
@@ -354,12 +357,12 @@ describe("khoản định kỳ quá hạn", () => {
       dayOfMonth: dayPassed,
       note: "",
     });
-    const item = () => repo.getRecurring().find((r) => r.name === "Tiền nhà quá hạn")!;
+    const item = () => repo.getRecurring(U).find((r) => r.name === "Tiền nhà quá hạn")!;
     expect(item().overdue).toBe(true);
     expect(item().nextDate).toBe(`${today.slice(0, 7)}-${String(dayPassed).padStart(2, "0")}`);
 
-    const cash = repo.getWallets().find((w) => w.kind === "cash")!;
-    repo.insertTransaction({
+    const cash = repo.getWallets(U).find((w) => w.kind === "cash")!;
+    repo.insertTransaction(U, {
       type: "expense",
       amount: 2_000_000,
       walletId: cash.id,
@@ -443,19 +446,19 @@ describe("nhiều nguồn thu nhập", () => {
     const { buildPlanFrame } = await import("./planning");
     const { todayVN, shiftMonth } = await import("./format");
     const next = shiftMonth(todayVN().slice(0, 7), 1);
-    const shb = repo.getWallets().find((w) => w.name === "SHB")!;
+    const shb = repo.getWallets(U).find((w) => w.name === "SHB")!;
 
-    repo.createRecurring({
+    repo.createRecurring(U, {
       name: "Lương chính",
       kind: "income",
       amount: 14_891_000,
       amountUsd: null,
-      categoryId: repo.getCategories().find((c) => c.name === "Lương")!.id,
+      categoryId: repo.getCategories(U).find((c) => c.name === "Lương")!.id,
       walletId: shb.id,
       dayOfMonth: 10,
       note: "",
     });
-    repo.createRecurring({
+    repo.createRecurring(U, {
       name: "Làm thêm",
       kind: "income",
       amount: 3_000_000,
@@ -466,10 +469,10 @@ describe("nhiều nguồn thu nhập", () => {
       note: "",
     });
 
-    const sources = repo.getRecurring().filter((r) => r.kind === "income");
+    const sources = repo.getRecurring(U).filter((r) => r.kind === "income");
     expect(sources.map((r) => r.name).sort()).toEqual(["Làm thêm", "Lương chính"]);
 
-    const frame = buildPlanFrame(next);
+    const frame = buildPlanFrame(U, next);
     // DB test đã có giao dịch thu từ các test trước nên có thể lấy theo lịch sử;
     // nếu lấy theo nguồn khai thì phải bằng tổng 2 nguồn
     if (frame.incomeSource === "sources") {
@@ -512,19 +515,19 @@ describe("tự gắn khoản định kỳ theo ghi chú", () => {
   it("khớp theo tên và đúng loại thu/chi, đã ghi trong tháng thì không khớp nữa", async () => {
     const { todayVN } = await import("./format");
     const today = todayVN();
-    const cash = repo.getWallets().find((w) => w.kind === "cash")!;
+    const cash = repo.getWallets(U).find((w) => w.kind === "cash")!;
 
-    repo.createRecurring({
+    repo.createRecurring(U, {
       name: "Tiền điện",
       kind: "expense",
       amount: 700_000,
       amountUsd: null,
-      categoryId: repo.getCategories().find((c) => c.name === "Hóa đơn")!.id,
+      categoryId: repo.getCategories(U).find((c) => c.name === "Hóa đơn")!.id,
       walletId: null,
       dayOfMonth: 15,
       note: "",
     });
-    repo.createRecurring({
+    repo.createRecurring(U, {
       name: "Thưởng dự án",
       kind: "income",
       amount: 2_000_000,
@@ -534,20 +537,20 @@ describe("tự gắn khoản định kỳ theo ghi chú", () => {
       dayOfMonth: null,
       note: "",
     });
-    const bill = repo.getRecurring().find((r) => r.name === "Tiền điện")!.id;
-    const bonus = repo.getRecurring().find((r) => r.name === "Thưởng dự án")!.id;
+    const bill = repo.getRecurring(U).find((r) => r.name === "Tiền điện")!.id;
+    const bonus = repo.getRecurring(U).find((r) => r.name === "Thưởng dự án")!.id;
 
     // Ghi chú chứa tên khoản → khớp
-    expect(repo.findRecurringByNote("thanh toán tiền điện", "expense")).toBe(bill);
-    expect(repo.findRecurringByNote("thưởng dự án tháng 9", "income")).toBe(bonus);
+    expect(repo.findRecurringByNote(U, "thanh toán tiền điện", "expense")).toBe(bill);
+    expect(repo.findRecurringByNote(U, "thưởng dự án tháng 9", "income")).toBe(bonus);
     // Sai loại thì không khớp (khoản chi không gắn vào nguồn thu)
-    expect(repo.findRecurringByNote("thưởng dự án tháng 9", "expense")).toBeNull();
-    expect(repo.findRecurringByNote("thanh toán tiền điện", "income")).toBeNull();
+    expect(repo.findRecurringByNote(U, "thưởng dự án tháng 9", "expense")).toBeNull();
+    expect(repo.findRecurringByNote(U, "thanh toán tiền điện", "income")).toBeNull();
     // Ghi chú không liên quan
-    expect(repo.findRecurringByNote("ăn trưa", "expense")).toBeNull();
+    expect(repo.findRecurringByNote(U, "ăn trưa", "expense")).toBeNull();
 
     // Ghi rồi thì tháng này không gắn thêm nữa
-    repo.insertTransaction({
+    repo.insertTransaction(U, {
       type: "expense",
       amount: 700_000,
       walletId: cash.id,
@@ -557,6 +560,61 @@ describe("tự gắn khoản định kỳ theo ghi chú", () => {
       date: `${today.slice(0, 7)}-15`,
       recurringId: bill,
     });
-    expect(repo.findRecurringByNote("thanh toán tiền điện", "expense")).toBeNull();
+    expect(repo.findRecurringByNote(U, "thanh toán tiền điện", "expense")).toBeNull();
+  });
+});
+
+describe("nhiều tài khoản", () => {
+  it("tài khoản mới có ví/danh mục riêng và không thấy dữ liệu của người khác", async () => {
+    const auth = await import("./auth");
+    // Tài khoản đầu tiên nhận luôn sổ đang có (người dùng số 1)
+    const owner = auth.registerUser({ username: "chuso", name: "Chủ sổ", password: "matkhau" });
+    expect(owner.id).toBe(U);
+
+    const bob = auth.registerUser({ username: "bob", name: "Bob", password: "matkhau" });
+    expect(bob.id).not.toBe(U);
+
+    // Sổ mới: có ví và danh mục mặc định, chưa có giao dịch nào
+    expect(repo.getWallets(bob.id).map((w) => w.name)).toEqual(["MB Bank", "SHB", "Ví MoMo", "Tiền mặt"]);
+    expect(repo.getWallets(bob.id).every((w) => w.balance === 0)).toBe(true);
+    expect(repo.listTransactions(bob.id)).toEqual([]);
+    expect(repo.getDebts(bob.id)).toEqual([]);
+
+    // Người dùng 1 vẫn còn nguyên dữ liệu
+    expect(repo.listTransactions(U).length).toBeGreaterThan(0);
+
+    // Ghi một giao dịch cho Bob: người dùng 1 không thấy
+    const before = repo.listTransactions(U).length;
+    repo.insertTransaction(bob.id, {
+      type: "expense",
+      amount: 50_000,
+      walletId: repo.getWallets(bob.id)[0].id,
+      toWalletId: null,
+      categoryId: null,
+      note: "cà phê của Bob",
+      date: "2026-09-11",
+      debtId: null,
+    });
+    expect(repo.listTransactions(bob.id).length).toBe(1);
+    expect(repo.listTransactions(U).length).toBe(before);
+  });
+
+  it("đăng nhập đúng mật khẩu mới tạo được phiên", async () => {
+    const auth = await import("./auth");
+    const found = auth.getUserByUsername("BOB");
+    expect(found?.id).toBeTruthy();
+    expect(auth.verifyPassword("matkhau", found!.passwordHash)).toBe(true);
+    expect(auth.verifyPassword("sai", found!.passwordHash)).toBe(false);
+
+    const { token } = auth.createSession(found!.id);
+    expect(auth.getSessionUser(token)?.username).toBe("bob");
+    auth.destroySession(token);
+    expect(auth.getSessionUser(token)).toBeNull();
+    expect(auth.getSessionUser("linh tinh")).toBeNull();
+  });
+
+  it("không đăng ký trùng tên", async () => {
+    const auth = await import("./auth");
+    expect(() => auth.registerUser({ username: "bob", name: "", password: "khac" })).toThrow(/đã có người dùng/);
   });
 });

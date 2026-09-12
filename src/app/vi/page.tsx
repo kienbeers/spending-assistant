@@ -11,6 +11,7 @@ import {
 import { ConfirmButton } from "@/components/confirm-button";
 import { formatVND } from "@/lib/format";
 import { getWallets, type Wallet } from "@/lib/repo";
+import { requireUserId } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Ví" };
 
@@ -20,7 +21,7 @@ const dateVN = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
 
 export default async function WalletsPage() {
   await connection();
-  const wallets = getWallets();
+  const wallets = getWallets(await requireUserId());
   const cards = wallets.filter((w) => w.kind === "credit");
   const cash = wallets.filter((w) => w.kind !== "credit");
   const cashTotal = cash.reduce((s, w) => s + w.balance, 0);

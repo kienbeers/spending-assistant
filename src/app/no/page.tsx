@@ -13,6 +13,7 @@ import { ConfirmButton } from "@/components/confirm-button";
 import { TxList } from "@/components/tx-list";
 import { addDays, formatVND, todayVN } from "@/lib/format";
 import { getDebts, getWallets, listTransactions, type Debt, type Wallet } from "@/lib/repo";
+import { requireUserId } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Sổ nợ" };
 
@@ -33,9 +34,10 @@ function daysBetween(a: string, b: string) {
 
 export default async function DebtsPage() {
   await connection();
+  const userId = await requireUserId();
   const today = todayVN();
-  const debts = getDebts();
-  const wallets = getWallets();
+  const debts = getDebts(userId);
+  const wallets = getWallets(userId);
 
   const open = debts.filter((d) => d.isOpen);
   const borrowing = open.filter((d) => d.direction === "borrow");
@@ -171,8 +173,8 @@ export default async function DebtsPage() {
         </section>
       )}
 
-      <DebtSection title="Khoản đi vay" empty="Không có khoản nợ nào." debts={borrowing} today={today} wallets={wallets} />
-      <DebtSection title="Khoản cho vay" empty="Không ai nợ bạn." debts={lending} today={today} wallets={wallets} />
+      <DebtSection title="Khoản đi vay" empty="Không có khoản nợ nào." debts={borrowing} today={today} wallets={wallets} userId={userId} />
+      <DebtSection title="Khoản cho vay" empty="Không ai nợ bạn." debts={lending} today={today} wallets={wallets} userId={userId} />
 
       <details className="card">
         <summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 font-medium text-accent">
@@ -233,7 +235,7 @@ export default async function DebtsPage() {
           <ul className="mt-2 space-y-2">
             {done.map((d) => (
               <li key={d.id}>
-                <DebtCard debt={d} today={today} wallets={wallets} />
+                <DebtCard debt={d} today={today} wallets={wallets} userId={userId} />
               </li>
             ))}
           </ul>
@@ -262,12 +264,14 @@ function DebtSection({
   debts,
   today,
   wallets,
+  userId,
 }: {
   title: string;
   empty: string;
   debts: Debt[];
   today: string;
   wallets: Wallet[];
+  userId: number;
 }) {
   return (
     <section className="space-y-2">
@@ -278,7 +282,7 @@ function DebtSection({
         <ul className="space-y-2">
           {debts.map((d) => (
             <li key={d.id}>
-              <DebtCard debt={d} today={today} wallets={wallets} />
+              <DebtCard debt={d} today={today} wallets={wallets} userId={userId} />
             </li>
           ))}
         </ul>
@@ -287,10 +291,20 @@ function DebtSection({
   );
 }
 
-function DebtCard({ debt: d, today, wallets }: { debt: Debt; today: string; wallets: Wallet[] }) {
+function DebtCard({
+  debt: d,
+  today,
+  wallets,
+  userId,
+}: {
+  debt: Debt;
+  today: string;
+  wallets: Wallet[];
+  userId: number;
+}) {
   const pct = d.total > 0 ? Math.min(100, Math.round((d.paid / d.total) * 100)) : 0;
   const overdue = d.isOpen && d.dueDate && d.dueDate < today;
-  const history = listTransactions({ debtId: d.id, limit: 20 });
+  const history = listTransactions(userId, { debtId: d.id, limit: 20 });
   const payWallets = wallets.filter((w) => w.kind !== "credit");
   const payAction = d.direction === "borrow" ? "repay" : "collect";
   const addAction = d.direction === "borrow" ? "borrow" : "lend";

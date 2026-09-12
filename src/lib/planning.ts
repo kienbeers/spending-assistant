@@ -6,20 +6,20 @@ import { getCategories, getDebts, getMonthSummary, getNumberSetting, getRecurrin
 
 // --- Ngân sách -------------------------------------------------------------------
 
-export function getBudgets(month: string): Map<number, number> {
+export function getBudgets(userId: number, month: string): Map<number, number> {
   const rows = getDb()
-    .prepare("SELECT category_id AS categoryId, amount FROM budgets WHERE month = ?")
-    .all(month) as { categoryId: number; amount: number }[];
+    .prepare("SELECT category_id AS categoryId, amount FROM budgets WHERE user_id = ? AND month = ?")
+    .all(userId, month) as { categoryId: number; amount: number }[];
   return new Map(rows.map((r) => [r.categoryId, r.amount]));
 }
 
 /** Ghi đè toàn bộ ngân sách của tháng (bỏ các danh mục có số 0). */
-export function saveBudgets(month: string, items: { categoryId: number; amount: number }[]) {
+export function saveBudgets(userId: number, month: string, items: { categoryId: number; amount: number }[]) {
   const db = getDb();
   db.transaction(() => {
-    db.prepare("DELETE FROM budgets WHERE month = ?").run(month);
-    const ins = db.prepare("INSERT INTO budgets (month, category_id, amount) VALUES (?, ?, ?)");
-    for (const it of items) if (it.amount > 0) ins.run(month, it.categoryId, it.amount);
+    db.prepare("DELETE FROM budgets WHERE user_id = ? AND month = ?").run(userId, month);
+    const ins = db.prepare("INSERT INTO budgets (user_id, month, category_id, amount) VALUES (?, ?, ?, ?)");
+    for (const it of items) if (it.amount > 0) ins.run(userId, month, it.categoryId, it.amount);
   })();
 }
 
@@ -35,20 +35,20 @@ export interface BudgetRow {
   avg3: number;
 }
 
-export function getBudgetRows(month: string): BudgetRow[] {
+export function getBudgetRows(userId: number, month: string): BudgetRow[] {
   const today = todayVN();
-  const budgets = getBudgets(month);
-  const summary = getMonthSummary(month);
+  const budgets = getBudgets(userId, month);
+  const summary = getMonthSummary(userId, month);
   const spentBy = new Map(summary.byCategory.map((c) => [c.categoryId, c.total]));
   // Trung bình các tháng trước `month` (bỏ tháng đang diễn ra và tháng chưa dùng app)
-  const trends = getCashflow(monthRange(shiftMonth(month, -1), 3)).categoryTrends;
+  const trends = getCashflow(userId, monthRange(shiftMonth(month, -1), 3)).categoryTrends;
   const avgBy = new Map(trends.map((t) => [t.categoryId, t.fullAvg]));
 
   const isCurrent = today.slice(0, 7) === month;
   const elapsed = Number(today.slice(8, 10));
   const factor = isCurrent && elapsed >= 5 ? daysInMonth(month) / elapsed : 1;
 
-  return getCategories()
+  return getCategories(userId)
     .filter((c) => c.type === "expense")
     .map((c) => {
       const spent = spentBy.get(c.id) ?? 0;
@@ -79,14 +79,14 @@ export interface Goal {
   monthsLeft: number | null;
 }
 
-export function getGoals(): Goal[] {
+export function getGoals(userId: number): Goal[] {
   const today = todayVN();
   const rows = getDb()
     .prepare(
       `SELECT id, name, target_amount AS targetAmount, saved_amount AS savedAmount, target_date AS targetDate
-       FROM goals ORDER BY target_date IS NULL, target_date, id`,
+       FROM goals WHERE user_id = ? ORDER BY target_date IS NULL, target_date, id`,
     )
-    .all() as Omit<Goal, "monthlyNeeded" | "monthsLeft">[];
+    .all(userId) as Omit<Goal, "monthlyNeeded" | "monthsLeft">[];
   return rows.map((g) => {
     if (!g.targetDate) return { ...g, monthlyNeeded: null, monthsLeft: null };
     const [ty, tm] = g.targetDate.split("-").map(Number);
@@ -97,25 +97,29 @@ export function getGoals(): Goal[] {
   });
 }
 
-export function createGoal(input: { name: string; targetAmount: number; savedAmount: number; targetDate: string | null }) {
+export function createGoal(
+  userId: number,
+  input: { name: string; targetAmount: number; savedAmount: number; targetDate: string | null },
+) {
   getDb()
     .prepare(
-      "INSERT INTO goals (name, target_amount, saved_amount, target_date, created_on) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO goals (user_id, name, target_amount, saved_amount, target_date, created_on) VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .run(input.name, input.targetAmount, input.savedAmount, input.targetDate, todayVN());
+    .run(userId, input.name, input.targetAmount, input.savedAmount, input.targetDate, todayVN());
 }
 
 export function updateGoal(
+  userId: number,
   id: number,
   input: { name: string; targetAmount: number; savedAmount: number; targetDate: string | null },
 ) {
   getDb()
-    .prepare("UPDATE goals SET name = ?, target_amount = ?, saved_amount = ?, target_date = ? WHERE id = ?")
-    .run(input.name, input.targetAmount, input.savedAmount, input.targetDate, id);
+    .prepare("UPDATE goals SET name = ?, target_amount = ?, saved_amount = ?, target_date = ? WHERE id = ? AND user_id = ?")
+    .run(input.name, input.targetAmount, input.savedAmount, input.targetDate, id, userId);
 }
 
-export function deleteGoal(id: number) {
-  getDb().prepare("DELETE FROM goals WHERE id = ?").run(id);
+export function deleteGoal(userId: number, id: number) {
+  getDb().prepare("DELETE FROM goals WHERE id = ? AND user_id = ?").run(id, userId);
 }
 
 // --- Khung kế hoạch tính sẵn -------------------------------------------------------------
@@ -142,20 +146,20 @@ export interface PlanFrame {
 
 const roundUp = (n: number, step: number) => Math.ceil(n / step) * step;
 
-export function buildPlanFrame(month: string): PlanFrame {
-  const cf = getCashflow(monthRange(shiftMonth(todayVN().slice(0, 7), -1), 3));
-  const loanPayments = getDebts()
+export function buildPlanFrame(userId: number, month: string): PlanFrame {
+  const cf = getCashflow(userId, monthRange(shiftMonth(todayVN().slice(0, 7), -1), 3));
+  const loanPayments = getDebts(userId)
     .filter((d) => d.isOpen && d.direction === "borrow")
     .reduce((s, d) => s + Math.min(d.monthlyPayment ?? 0, d.outstanding), 0);
   // Thẻ tín dụng: chỉ trừ khi đã đặt "trả mỗi tháng" cho thẻ (để trống thì không đoán hộ)
-  const cardPayments = getWallets()
+  const cardPayments = getWallets(userId)
     .filter((w) => w.kind === "credit" && w.used > 0 && w.monthlyPayment)
     .reduce((s, w) => s + Math.min(w.monthlyPayment ?? 0, w.used), 0);
   const debtPayments = loanPayments + cardPayments;
-  const goalSavings = getGoals().reduce((s, g) => s + (g.monthlyNeeded ?? 0), 0);
-  const declared = getNumberSetting(EXPECTED_INCOME_KEY) ?? 0;
+  const goalSavings = getGoals(userId).reduce((s, g) => s + (g.monthlyNeeded ?? 0), 0);
+  const declared = getNumberSetting(userId, EXPECTED_INCOME_KEY) ?? 0;
   // Tổng các nguồn thu định kỳ (lương, làm thêm...), lấy số lần gần nhất nếu có
-  const sources = getRecurring().filter((r) => r.kind === "income" && r.active);
+  const sources = getRecurring(userId).filter((r) => r.kind === "income" && r.active);
   const sourcesTotal = sources.reduce((t, r) => t + (r.lastAmount ?? r.amount ?? 0), 0);
   // Ưu tiên số liệu thật, sau đó tổng các nguồn, cuối cùng là số bạn tự khai
   const incomeSource: PlanFrame["incomeSource"] =
@@ -165,7 +169,7 @@ export function buildPlanFrame(month: string): PlanFrame {
   const incomeFromSetting = incomeSource === "declared";
   const spendable = expectedIncome - debtPayments - goalSavings;
 
-  const cats = getCategories().filter((c) => c.type === "expense");
+  const cats = getCategories(userId).filter((c) => c.type === "expense");
   const avgBy = new Map(cf.categoryTrends.map((t) => [t.categoryId, t.fullAvg]));
   let suggestions = cats
     .map((c) => {
@@ -209,13 +213,13 @@ const monthVN = (month: string) => `${Number(month.slice(5, 7))}/${month.slice(0
  * Viết toàn bộ số liệu (đã tính sẵn) thành văn bản ngắn. AI chỉ được dùng các con số trong đây,
  * nhờ vậy model nhỏ chạy local không phải tự cộng trừ.
  */
-export function buildFinancialSnapshot(month: string): string {
+export function buildFinancialSnapshot(userId: number, month: string): string {
   const today = todayVN();
   const isCurrent = today.slice(0, 7) === month;
   const lines: string[] = [];
-  const s = getMonthSummary(month);
-  const rows = getBudgetRows(month);
-  const cf = getCashflow(monthRange(month, 4));
+  const s = getMonthSummary(userId, month);
+  const rows = getBudgetRows(userId, month);
+  const cf = getCashflow(userId, monthRange(month, 4));
   const history = cf.months.filter((x) => x.month !== month);
   const withData = history.filter((x) => x.income + x.expense > 0);
 
@@ -247,7 +251,7 @@ export function buildFinancialSnapshot(month: string): string {
     for (const a of anomalies) lines.push(`- ${a.name}: ${m(a.reference)}, cao hơn ${a.changePct}% (TB ${m(a.avg)})`);
   }
 
-  const debts = getDebts().filter((d) => d.isOpen);
+  const debts = getDebts(userId).filter((d) => d.isOpen);
   const borrow = debts.filter((d) => d.direction === "borrow");
   const lend = debts.filter((d) => d.direction === "lend");
   if (debts.length) {
@@ -281,7 +285,7 @@ export function buildFinancialSnapshot(month: string): string {
     }
   }
 
-  const cards = getWallets().filter((w) => w.kind === "credit");
+  const cards = getWallets(userId).filter((w) => w.kind === "credit");
   if (cards.length) {
     lines.push("", "# Thẻ tín dụng (tiền đã tiêu bằng thẻ ĐÃ tính trong phần chi tiêu ở trên)");
     for (const w of cards) {
@@ -294,7 +298,7 @@ export function buildFinancialSnapshot(month: string): string {
     }
   }
 
-  const goals = getGoals();
+  const goals = getGoals(userId);
   if (goals.length) {
     lines.push("", "# Mục tiêu tiết kiệm");
     for (const g of goals) {
@@ -304,8 +308,8 @@ export function buildFinancialSnapshot(month: string): string {
     }
   }
 
-  const frame = buildPlanFrame(shiftMonth(month, 1));
-  const walletList = getWallets();
+  const frame = buildPlanFrame(userId, shiftMonth(month, 1));
+  const walletList = getWallets(userId);
   const cashBalance = walletList.filter((w) => w.kind !== "credit").reduce((t, w) => t + w.balance, 0);
   const cardDebt = walletList.filter((w) => w.kind === "credit").reduce((t, w) => t + w.used, 0);
   lines.push("", "# Số liệu đã tính sẵn");
@@ -341,22 +345,24 @@ export interface AiReport {
   createdAt: string;
 }
 
-export function saveAiReport(kind: string, month: string, content: string, model: string) {
-  getDb().prepare("INSERT INTO ai_reports (kind, month, content, model) VALUES (?, ?, ?, ?)").run(kind, month, content, model);
+export function saveAiReport(userId: number, kind: string, month: string, content: string, model: string) {
+  getDb()
+    .prepare("INSERT INTO ai_reports (user_id, kind, month, content, model) VALUES (?, ?, ?, ?, ?)")
+    .run(userId, kind, month, content, model);
 }
 
-export function getLatestAiReport(kind: string, month: string): AiReport | null {
+export function getLatestAiReport(userId: number, kind: string, month: string): AiReport | null {
   return (
     (getDb()
       .prepare(
-        "SELECT content, model, created_at AS createdAt FROM ai_reports WHERE kind = ? AND month = ? ORDER BY id DESC LIMIT 1",
+        "SELECT content, model, created_at AS createdAt FROM ai_reports WHERE user_id = ? AND kind = ? AND month = ? ORDER BY id DESC LIMIT 1",
       )
-      .get(kind, month) as AiReport | undefined) ?? null
+      .get(userId, kind, month) as AiReport | undefined) ?? null
   );
 }
 
-export function hasAnyTransactions(): boolean {
-  return !!getDb().prepare("SELECT 1 FROM transactions LIMIT 1").get();
+export function hasAnyTransactions(userId: number): boolean {
+  return !!getDb().prepare("SELECT 1 FROM transactions WHERE user_id = ? LIMIT 1").get(userId);
 }
 
 // --- Kế hoạch mục tiêu --------------------------------------------------------------
@@ -383,50 +389,52 @@ export interface PlanInput {
   extraPerMonth: number;
 }
 
-export function getPlans(): Plan[] {
+export function getPlans(userId: number): Plan[] {
   return getDb()
     .prepare(
       `SELECT id, title, goal_text AS goalText, target_amount AS targetAmount, target_date AS targetDate,
          extra_per_month AS extraPerMonth, status, ai_content AS aiContent, ai_model AS aiModel, ai_at AS aiAt,
          created_on AS createdOn
-       FROM plans ORDER BY status, id DESC`,
+       FROM plans WHERE user_id = ? ORDER BY status, id DESC`,
     )
-    .all() as Plan[];
+    .all(userId) as Plan[];
 }
 
-export function getPlan(id: number): Plan | null {
-  return getPlans().find((p) => p.id === id) ?? null;
+export function getPlan(userId: number, id: number): Plan | null {
+  return getPlans(userId).find((p) => p.id === id) ?? null;
 }
 
-export function createPlan(input: PlanInput): number {
+export function createPlan(userId: number, input: PlanInput): number {
   const r = getDb()
     .prepare(
-      `INSERT INTO plans (title, goal_text, target_amount, target_date, extra_per_month, created_on)
-       VALUES (@title, @goalText, @targetAmount, @targetDate, @extraPerMonth, @createdOn)`,
+      `INSERT INTO plans (user_id, title, goal_text, target_amount, target_date, extra_per_month, created_on)
+       VALUES (@userId, @title, @goalText, @targetAmount, @targetDate, @extraPerMonth, @createdOn)`,
     )
-    .run({ ...input, createdOn: todayVN() });
+    .run({ ...input, userId, createdOn: todayVN() });
   return Number(r.lastInsertRowid);
 }
 
-export function updatePlan(id: number, input: PlanInput) {
+export function updatePlan(userId: number, id: number, input: PlanInput) {
   getDb()
     .prepare(
       `UPDATE plans SET title = @title, goal_text = @goalText, target_amount = @targetAmount,
-         target_date = @targetDate, extra_per_month = @extraPerMonth WHERE id = @id`,
+         target_date = @targetDate, extra_per_month = @extraPerMonth WHERE id = @id AND user_id = @userId`,
     )
-    .run({ ...input, id });
+    .run({ ...input, id, userId });
 }
 
-export function setPlanStatus(id: number, status: Plan["status"]) {
-  getDb().prepare("UPDATE plans SET status = ? WHERE id = ?").run(status, id);
+export function setPlanStatus(userId: number, id: number, status: Plan["status"]) {
+  getDb().prepare("UPDATE plans SET status = ? WHERE id = ? AND user_id = ?").run(status, id, userId);
 }
 
-export function deletePlan(id: number) {
-  getDb().prepare("DELETE FROM plans WHERE id = ?").run(id);
+export function deletePlan(userId: number, id: number) {
+  getDb().prepare("DELETE FROM plans WHERE id = ? AND user_id = ?").run(id, userId);
 }
 
-export function savePlanAi(id: number, content: string, model: string) {
+export function savePlanAi(userId: number, id: number, content: string, model: string) {
   getDb()
-    .prepare("UPDATE plans SET ai_content = ?, ai_model = ?, ai_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?")
-    .run(content, model, id);
+    .prepare(
+      "UPDATE plans SET ai_content = ?, ai_model = ?, ai_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND user_id = ?",
+    )
+    .run(content, model, id, userId);
 }

@@ -177,6 +177,86 @@ const MIGRATIONS: string[] = [
   -- Khoản định kỳ nhận cả khoản THU (nhiều nguồn thu nhập), không chỉ khoản chi
   ALTER TABLE recurring ADD COLUMN kind TEXT NOT NULL DEFAULT 'expense' CHECK (kind IN ('expense', 'income'));
   `,
+  `
+  -- Nhiều người dùng: mỗi người một sổ riêng. Dữ liệu đang có thuộc về người dùng số 1.
+  CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    password_hash TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  -- Người dùng số 1 là chủ sở hữu dữ liệu hiện có; mật khẩu đặt ở lần đăng ký đầu tiên
+  INSERT OR IGNORE INTO users (id, username, name) VALUES (1, '', 'Chủ sở hữu');
+
+  CREATE TABLE sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    expires_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_sessions_user ON sessions(user_id);
+
+  ALTER TABLE wallets ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE transactions ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE debts ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE goals ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE recurring ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE plans ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE ai_reports ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1;
+  CREATE INDEX idx_wallets_user ON wallets(user_id);
+  CREATE INDEX idx_tx_user ON transactions(user_id, occurred_on);
+  CREATE INDEX idx_debts_user ON debts(user_id);
+  CREATE INDEX idx_recurring_user ON recurring(user_id);
+
+  -- Các bảng có ràng buộc duy nhất phải dựng lại để duy nhất theo từng người
+  CREATE TABLE categories_new (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('expense', 'income')),
+    icon TEXT NOT NULL DEFAULT '📦',
+    sort INTEGER NOT NULL DEFAULT 0,
+    is_fixed INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (user_id, name, type)
+  );
+  INSERT INTO categories_new (id, name, type, icon, sort, is_fixed)
+    SELECT id, name, type, icon, sort, is_fixed FROM categories;
+  DROP TABLE categories;
+  ALTER TABLE categories_new RENAME TO categories;
+
+  CREATE TABLE keywords_new (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL DEFAULT 1,
+    keyword TEXT NOT NULL,
+    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    UNIQUE (user_id, keyword)
+  );
+  INSERT INTO keywords_new (id, keyword, category_id) SELECT id, keyword, category_id FROM keywords;
+  DROP TABLE keywords;
+  ALTER TABLE keywords_new RENAME TO keywords;
+
+  CREATE TABLE budgets_new (
+    user_id INTEGER NOT NULL DEFAULT 1,
+    month TEXT NOT NULL,
+    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    amount INTEGER NOT NULL CHECK (amount >= 0),
+    PRIMARY KEY (user_id, month, category_id)
+  );
+  INSERT INTO budgets_new (month, category_id, amount) SELECT month, category_id, amount FROM budgets;
+  DROP TABLE budgets;
+  ALTER TABLE budgets_new RENAME TO budgets;
+
+  CREATE TABLE settings_new (
+    user_id INTEGER NOT NULL DEFAULT 1,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (user_id, key)
+  );
+  INSERT INTO settings_new (key, value) SELECT key, value FROM settings;
+  DROP TABLE settings;
+  ALTER TABLE settings_new RENAME TO settings;
+  `,
 ];
 
 function open(): Database.Database {
@@ -227,9 +307,10 @@ function migrate(db: Database.Database) {
 /** Tách file SQL thành từng câu lệnh (migration trong file này không có dấu ; trong chuỗi) */
 function splitStatements(sql: string): string[] {
   return sql
+    // bỏ ghi chú trước khi tách: dấu ; trong câu ghi chú sẽ cắt nhầm câu lệnh
+    .replace(/--[^\n]*/g, "")
     .split(";")
-    // bỏ các dòng ghi chú ở đầu mỗi câu, không bỏ cả câu lệnh
-    .map((part) => part.replace(/^(?:\s*--[^\n]*\n?)+/, "").trim())
+    .map((part) => part.trim())
     .filter(Boolean);
 }
 

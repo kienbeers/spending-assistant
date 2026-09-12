@@ -64,7 +64,7 @@ export function monthRange(endMonth: string, count: number): string[] {
   return Array.from({ length: count }, (_, i) => shiftMonth(endMonth, i - count + 1));
 }
 
-export function getCashflow(months: string[]): Cashflow {
+export function getCashflow(userId: number, months: string[]): Cashflow {
   const db = getDb();
   const start = `${months[0]}-01`;
   const end = `${shiftMonth(months[months.length - 1], 1)}-01`;
@@ -83,10 +83,10 @@ export function getCashflow(months: string[]): Cashflow {
        FROM transactions t
        LEFT JOIN categories c ON c.id = t.category_id
        LEFT JOIN debts d ON d.id = t.debt_id
-       WHERE t.occurred_on >= ? AND t.occurred_on < ?
+       WHERE t.user_id = ? AND t.occurred_on >= ? AND t.occurred_on < ?
        GROUP BY month`,
     )
-    .all(start, end) as Omit<CashflowMonth, "net" | "partial">[];
+    .all(userId, start, end) as Omit<CashflowMonth, "net" | "partial">[];
   const byMonth = new Map(monthly.map((m) => [m.month, m]));
 
   const monthRows: CashflowMonth[] = months.map((month) => {
@@ -95,7 +95,7 @@ export function getCashflow(months: string[]): Cashflow {
   });
 
   // Các tháng trước khi bắt đầu dùng app không có dữ liệu → không tính vào trung bình
-  const first = (db.prepare("SELECT MIN(occurred_on) AS d FROM transactions").get() as { d: string | null }).d;
+  const first = (db.prepare("SELECT MIN(occurred_on) AS d FROM transactions WHERE user_id = ?").get(userId) as { d: string | null }).d;
   const firstMonth = first?.slice(0, 7) ?? currentMonth;
   const full = monthRows.filter((m) => !m.partial && m.month >= firstMonth);
   const sum = (rows: CashflowMonth[], k: keyof CashflowMonth) => rows.reduce((s, r) => s + (r[k] as number), 0);
@@ -124,10 +124,10 @@ export function getCashflow(months: string[]): Cashflow {
       `SELECT t.category_id AS categoryId, COALESCE(c.name, 'Chưa phân loại') AS name, COALESCE(c.icon, '❔') AS icon,
          SUM(t.amount) AS total
        FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
-       WHERE t.type = 'income' AND t.debt_id IS NULL AND t.occurred_on >= ? AND t.occurred_on < ?
+       WHERE t.user_id = ? AND t.type = 'income' AND t.debt_id IS NULL AND t.occurred_on >= ? AND t.occurred_on < ?
        GROUP BY t.category_id ORDER BY total DESC`,
     )
-    .all(start, end) as Cashflow["incomeByCategory"];
+    .all(userId, start, end) as Cashflow["incomeByCategory"];
 
   const walletFlows = db
     .prepare(
@@ -141,9 +141,10 @@ export function getCashflow(months: string[]): Cashflow {
        FROM wallets w
        LEFT JOIN transactions t ON (t.wallet_id = w.id OR t.to_wallet_id = w.id)
          AND t.occurred_on >= ? AND t.occurred_on < ?
+       WHERE w.user_id = ?
        GROUP BY w.id ORDER BY w.sort, w.id`,
     )
-    .all(start, end) as WalletFlow[];
+    .all(start, end, userId) as WalletFlow[];
 
   // Xu hướng từng danh mục chi
   const catRows = db
@@ -151,10 +152,10 @@ export function getCashflow(months: string[]): Cashflow {
       `SELECT t.category_id AS categoryId, COALESCE(c.name, 'Chưa phân loại') AS name, COALESCE(c.icon, '❔') AS icon,
          COALESCE(c.is_fixed, 0) AS isFixed, substr(t.occurred_on, 1, 7) AS month, SUM(t.amount) AS total
        FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
-       WHERE t.type = 'expense' AND t.debt_id IS NULL AND t.occurred_on >= ? AND t.occurred_on < ?
+       WHERE t.user_id = ? AND t.type = 'expense' AND t.debt_id IS NULL AND t.occurred_on >= ? AND t.occurred_on < ?
        GROUP BY t.category_id, month`,
     )
-    .all(start, end) as { categoryId: number | null; name: string; icon: string; isFixed: number; month: string; total: number }[];
+    .all(userId, start, end) as { categoryId: number | null; name: string; icon: string; isFixed: number; month: string; total: number }[];
 
   const monthIndex = new Map(months.map((m, i) => [m, i]));
   const partialIdx = months.indexOf(currentMonth);
@@ -202,7 +203,7 @@ export function getCashflow(months: string[]): Cashflow {
     t.anomaly = enoughData && t.avg > 0 && t.reference > t.avg * 1.3 && t.reference - t.avg >= 200_000;
   }
 
-  const topExpenses = listTransactions({
+  const topExpenses = listTransactions(userId, {
     type: "expense",
     plainOnly: true,
     dateFrom: start,

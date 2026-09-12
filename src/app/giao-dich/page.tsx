@@ -8,6 +8,7 @@ import { TxList } from "@/components/tx-list";
 import { formatVND, isValidMonth, todayVN } from "@/lib/format";
 import type { TxType } from "@/lib/quick-parse";
 import { getCategories, getWallets, listTransactions } from "@/lib/repo";
+import { requireUserId } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Giao dịch" };
 
@@ -16,6 +17,7 @@ const TX_TYPES: TxType[] = ["expense", "income", "transfer"];
 
 export default async function TransactionsPage({ searchParams }: PageProps<"/giao-dich">) {
   await connection();
+  const userId = await requireUserId();
   const sp = await searchParams;
   const today = todayVN();
   const month = isValidMonth(str(sp.m) ?? "") ? str(sp.m)! : today.slice(0, 7);
@@ -24,7 +26,7 @@ export default async function TransactionsPage({ searchParams }: PageProps<"/gia
   const categoryId = Number(str(sp.dm)) || undefined;
   const q = str(sp.q);
 
-  const txs = listTransactions({ month, type, walletId, categoryId, q });
+  const txs = listTransactions(userId, { month, type, walletId, categoryId, q });
   const expense = txs.filter((t) => t.type === "expense" && !t.debtId).reduce((s, t) => s + t.amount, 0);
   const income = txs.filter((t) => t.type === "income" && !t.debtId).reduce((s, t) => s + t.amount, 0);
 
@@ -48,7 +50,7 @@ export default async function TransactionsPage({ searchParams }: PageProps<"/gia
       </div>
 
       <Suspense>
-        <TxFilters wallets={getWallets()} categories={getCategories()} />
+        <TxFilters wallets={getWallets(userId)} categories={getCategories(userId)} />
       </Suspense>
 
       <p className="text-[13px] text-ink-3">

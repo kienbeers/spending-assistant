@@ -4,6 +4,7 @@ import { TxEditor } from "@/components/tx-editor";
 import { TxList } from "@/components/tx-list";
 import type { DebtAction, QuickParseResult } from "@/lib/quick-parse";
 import { getDebts, getEditorContext, getRecurring, listTransactions } from "@/lib/repo";
+import { requireUserId } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Thêm giao dịch" };
 
@@ -11,9 +12,10 @@ const DEBT_ACTIONS: DebtAction[] = ["lend", "collect", "borrow", "repay"];
 
 export default async function AddPage({ searchParams }: PageProps<"/them">) {
   await connection();
+  const userId = await requireUserId();
   const sp = await searchParams;
-  const recent = listTransactions({ limit: 5, order: "recent" });
-  const ctx = getEditorContext();
+  const recent = listTransactions(userId, { limit: 5, order: "recent" });
+  const ctx = getEditorContext(userId);
 
   // /them?no=3&act=repay — mở từ trang Sổ nợ
   const debt = ctx.debts.find((d) => d.id === Number(sp.no));
@@ -23,11 +25,11 @@ export default async function AddPage({ searchParams }: PageProps<"/them">) {
   const payFrom = ctx.wallets.find((w) => w.isDefault && w.kind !== "credit") ?? ctx.wallets.find((w) => w.kind === "bank");
 
   // /them?lai=3 — trả lãi khoản vay lãi ngoài: ghi là khoản chi danh mục "Lãi vay"
-  const interestDebt = getDebts().find((d) => d.id === Number(sp.lai) && d.paymentIsInterest);
+  const interestDebt = getDebts(userId).find((d) => d.id === Number(sp.lai) && d.paymentIsInterest);
   const interestCategory = ctx.categories.find((c) => c.name === "Lãi vay");
 
   // /them?dk=2 — ghi khoản định kỳ (số tiền gợi ý theo lần gần nhất)
-  const recurring = getRecurring().find((r) => r.id === Number(sp.dk));
+  const recurring = getRecurring(userId).find((r) => r.id === Number(sp.dk));
   const recurringPreset: Partial<QuickParseResult> | undefined = recurring
     ? {
         type: recurring.kind, // khoản thu định kỳ (lương, làm thêm) hoặc khoản chi

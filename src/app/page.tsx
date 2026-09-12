@@ -7,9 +7,11 @@ import { TxEditor } from "@/components/tx-editor";
 import { TxList } from "@/components/tx-list";
 import { addDays, formatVND, isValidMonth, todayVN } from "@/lib/format";
 import { getEditorContext, getMonthSummary, getRecurring, getWallets, listTransactions } from "@/lib/repo";
+import { requireUserId } from "@/lib/session";
 
 export default async function Home({ searchParams }: PageProps<"/">) {
   await connection();
+  const userId = await requireUserId();
   const sp = await searchParams;
   const today = todayVN();
   const month = typeof sp.m === "string" && isValidMonth(sp.m) ? sp.m : today.slice(0, 7);
@@ -17,14 +19,14 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   // Khoản định kỳ quá hạn hoặc sắp tới trong 5 ngày (chỉ khi đang xem tháng này)
   const reminders =
     month === today.slice(0, 7)
-      ? getRecurring().filter(
+      ? getRecurring(userId).filter(
           (r) => r.active && !r.doneThisMonth && r.nextDate !== null && r.nextDate <= addDays(today, 5),
         )
       : [];
 
-  const summary = getMonthSummary(month);
-  const wallets = getWallets();
-  const recent = listTransactions({ month, limit: 6 });
+  const summary = getMonthSummary(userId, month);
+  const wallets = getWallets(userId);
+  const recent = listTransactions(userId, { month, limit: 6 });
   // Tổng số dư = tiền thật còn trong các ví/tài khoản (không trừ dư nợ thẻ tín dụng)
   const totalBalance = wallets.filter((w) => w.kind !== "credit").reduce((s, w) => s + w.balance, 0);
   const cardDebt = wallets.filter((w) => w.kind === "credit").reduce((s, w) => s + w.used, 0);
@@ -87,7 +89,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
           <section className="card p-4" aria-label="Nhập nhanh">
-            <TxEditor ctx={getEditorContext()} compact />
+            <TxEditor ctx={getEditorContext(userId)} compact />
           </section>
 
           <section className="card p-4">

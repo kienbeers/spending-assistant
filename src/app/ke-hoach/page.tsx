@@ -35,11 +35,13 @@ import {
   type Recurring,
   type Wallet,
 } from "@/lib/repo";
+import { requireUserId } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Kế hoạch" };
 
 export default async function PlanPage({ searchParams }: PageProps<"/ke-hoach">) {
   await connection();
+  const userId = await requireUserId();
   const { m } = await searchParams;
   const today = todayVN();
   const current = today.slice(0, 7);
@@ -47,18 +49,18 @@ export default async function PlanPage({ searchParams }: PageProps<"/ke-hoach">)
   const month = typeof m === "string" && isValidMonth(m) && (m === current || m === next) ? m : current;
   const isCurrent = month === current;
 
-  const frame = buildPlanFrame(month);
-  const rows = getBudgetRows(month);
-  const previous = [...getBudgets(shiftMonth(month, -1))].map(([categoryId, amount]) => ({ categoryId, amount }));
-  const goals = getGoals();
-  const declaredIncome = getNumberSetting(EXPECTED_INCOME_KEY);
-  const recurring = getRecurring();
-  const wallets = getWallets();
-  const allCategories = getCategories();
-  const cardsWithoutPlan = getWallets().filter((w) => w.kind === "credit" && w.used > 0 && !w.monthlyPayment);
+  const frame = buildPlanFrame(userId, month);
+  const rows = getBudgetRows(userId, month);
+  const previous = [...getBudgets(userId, shiftMonth(month, -1))].map(([categoryId, amount]) => ({ categoryId, amount }));
+  const goals = getGoals(userId);
+  const declaredIncome = getNumberSetting(userId, EXPECTED_INCOME_KEY);
+  const recurring = getRecurring(userId);
+  const wallets = getWallets(userId);
+  const allCategories = getCategories(userId);
+  const cardsWithoutPlan = wallets.filter((w) => w.kind === "credit" && w.used > 0 && !w.monthlyPayment);
   const ai = getAi();
   const aiStatus = await ai.check();
-  const lastReview = getLatestAiReport("review", current);
+  const lastReview = getLatestAiReport(userId, "review", current);
 
   return (
     <div className="space-y-4">
