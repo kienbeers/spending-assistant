@@ -108,27 +108,114 @@ function seedNewUser(userId: number) {
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
 /** Tạo phiên mới, trả về token để lưu vào cookie */
-export function createSession(userId: number): { token: string; expiresAt: Date } {
+export function createSession(userId: number, device = ""): { token: string; expiresAt: Date } {
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86_400_000);
+  const now = new Date().toISOString();
   getDb()
-    .prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)")
-    .run(hashToken(token), userId, expiresAt.toISOString());
+    .prepare("INSERT INTO sessions (token_hash, user_id, expires_at, device, last_seen) VALUES (?, ?, ?, ?, ?)")
+    .run(hashToken(token), userId, expiresAt.toISOString(), device.slice(0, 200), now);
   return { token, expiresAt };
 }
 
 export function getSessionUser(token: string | undefined): User | null {
   if (!token) return null;
   const db = getDb();
-  db.prepare("DELETE FROM sessions WHERE expires_at < ?").run(new Date().toISOString());
-  return (
+  const now = new Date().toISOString();
+  db.prepare("DELETE FROM sessions WHERE expires_at < ?").run(now);
+  const hash = hashToken(token);
+  const user =
     (db
       .prepare(
         `SELECT u.id, u.username, u.name FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ? AND s.expires_at >= ?`,
       )
-      .get(hashToken(token), new Date().toISOString()) as User | undefined) ?? null
-  );
+      .get(hash, now) as User | undefined) ?? null;
+  // Ghi "lần cuối dùng" tối đa 1 giờ/lần để không phải ghi đĩa mỗi lượt xem trang
+  if (user) {
+    const ago = new Date(Date.now() - 3_600_000).toISOString();
+    db.prepare("UPDATE sessions SET last_seen = ? WHERE token_hash = ? AND (last_seen IS NULL OR last_seen < ?)").run(
+      now,
+      hash,
+      ago,
+    );
+  }
+  return user;
+}
+
+export interface SessionRow {
+  id: string;
+  device: string;
+  createdAt: string;
+  lastSeen: string | null;
+  current: boolean;
+}
+
+/** Các thiết bị đang đăng nhập của một người */
+export function listSessions(userId: number, currentToken: string | undefined): SessionRow[] {
+  const current = currentToken ? hashToken(currentToken) : "";
+  return (
+    getDb()
+      .prepare(
+        `SELECT token_hash AS id, device, created_at AS createdAt, last_seen AS lastSeen
+         FROM sessions WHERE user_id = ? ORDER BY last_seen IS NULL, last_seen DESC, created_at DESC`,
+      )
+      .all(userId) as Omit<SessionRow, "current">[]
+  ).map((r) => ({ ...r, current: r.id === current }));
+}
+
+/** Đăng xuất mọi thiết bị khác, giữ lại thiết bị đang dùng */
+export function destroyOtherSessions(userId: number, keepToken: string | undefined): number {
+  const r = getDb()
+    .prepare("DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?")
+    .run(userId, keepToken ? hashToken(keepToken) : "");
+  return r.changes;
+}
+
+export function updateUserName(userId: number, name: string) {
+  getDb().prepare("UPDATE users SET name = ? WHERE id = ?").run(name.trim().slice(0, 60), userId);
+}
+
+/**
+ * Đổi mật khẩu. Sai mật khẩu cũ thì không đổi.
+ * Đổi xong hủy hết phiên khác để thiết bị lạ (nếu có) bị văng ra.
+ */
+export function changePassword(userId: number, oldPassword: string, newPassword: string, keepToken?: string) {
+  const db = getDb();
+  const row = db.prepare("SELECT password_hash AS hash FROM users WHERE id = ?").get(userId) as
+    | { hash: string | null }
+    | undefined;
+  if (!row || !verifyPassword(oldPassword, row.hash)) throw new Error("Mật khẩu hiện tại không đúng");
+  db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(newPassword), userId);
+  destroyOtherSessions(userId, keepToken);
+}
+
+/** Tên thiết bị đọc được từ User-Agent, chỉ để bạn nhận ra máy nào */
+export function deviceLabel(userAgent: string): string {
+  const ua = userAgent || "";
+  const os = /iPhone/i.test(ua)
+    ? "iPhone"
+    : /iPad/i.test(ua)
+      ? "iPad"
+      : /Android/i.test(ua)
+        ? "Android"
+        : /Mac OS X|Macintosh/i.test(ua)
+          ? "Mac"
+          : /Windows/i.test(ua)
+            ? "Windows"
+            : /Linux/i.test(ua)
+              ? "Linux"
+              : "Thiết bị khác";
+  const browser = /Edg\//i.test(ua)
+    ? "Edge"
+    : /CriOS|Chrome/i.test(ua)
+      ? "Chrome"
+      : /FxiOS|Firefox/i.test(ua)
+        ? "Firefox"
+        : /Safari/i.test(ua)
+          ? "Safari"
+          : "";
+  return browser ? `${os} · ${browser}` : os;
 }
 
 export function destroySession(token: string | undefined) {

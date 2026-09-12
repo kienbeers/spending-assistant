@@ -1,9 +1,8 @@
 "use client";
 
-import { ChartColumn, Flag, HandCoins, LayoutDashboard, List, LogOut, Plus, Tags, Target, Wallet } from "lucide-react";
+import { ChartColumn, Flag, HandCoins, LayoutDashboard, List, Plus, Tags, Target, UserRound, Wallet } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { logoutAction } from "@/app/auth-actions";
 
 // Thanh dưới (điện thoại): 4 mục chính + nút Thêm ở giữa
 const PRIMARY = [
@@ -50,17 +49,14 @@ export function AppNav({ user }: { user: { name: string; username: string } }) {
           >
             <Plus size={16} strokeWidth={2.5} /> Thêm
           </Link>
-          <form action={logoutAction} className="ml-2 flex items-center gap-1.5">
-            <span className="max-w-32 truncate text-sm text-ink-3">{user.name || user.username}</span>
-            <button
-              type="submit"
-              aria-label="Đăng xuất"
-              title="Đăng xuất"
-              className="flex size-9 items-center justify-center rounded-lg text-ink-3 transition hover:text-ink"
-            >
-              <LogOut size={17} />
-            </button>
-          </form>
+          <Link
+            href="/tai-khoan"
+            aria-current={isActive("/tai-khoan") ? "page" : undefined}
+            className="ml-2 flex max-w-40 items-center gap-1.5 rounded-lg px-2 py-2 text-sm text-ink-3 transition hover:text-ink aria-[current=page]:bg-surface-2 aria-[current=page]:text-ink"
+          >
+            <UserRound size={16} />
+            <span className="truncate">{user.name || user.username}</span>
+          </Link>
         </nav>
       </header>
 
@@ -81,15 +77,14 @@ export function AppNav({ user }: { user: { name: string; username: string } }) {
               <Icon size={21} />
             </Link>
           ))}
-          <form action={logoutAction} className="flex">
-            <button
-              type="submit"
-              aria-label={`Đăng xuất ${user.name || user.username}`}
-              className="flex size-11 items-center justify-center rounded-full text-ink-3 active:bg-surface-2"
-            >
-              <LogOut size={20} />
-            </button>
-          </form>
+          <Link
+            href="/tai-khoan"
+            aria-label={`Tài khoản ${user.name || user.username}`}
+            aria-current={isActive("/tai-khoan") ? "page" : undefined}
+            className="flex size-11 items-center justify-center rounded-full text-ink-3 active:bg-surface-2 aria-[current=page]:text-accent"
+          >
+            <UserRound size={21} />
+          </Link>
         </nav>
       </header>
 

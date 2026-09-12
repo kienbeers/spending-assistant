@@ -257,6 +257,11 @@ const MIGRATIONS: string[] = [
   DROP TABLE settings;
   ALTER TABLE settings_new RENAME TO settings;
   `,
+  `
+  -- Nhớ thiết bị của từng phiên để xem và đăng xuất từ xa
+  ALTER TABLE sessions ADD COLUMN device TEXT NOT NULL DEFAULT '';
+  ALTER TABLE sessions ADD COLUMN last_seen TEXT;
+  `,
 ];
 
 function open(): Database.Database {

@@ -8,6 +8,8 @@ Chạy trên Jetson (`thinhhv@100.88.32.64`), dữ liệu trong `~/projects/chi-
 - **Trên iPhone:** Safari → Chia sẻ → **Thêm vào MH chính**.
 - **Đăng nhập:** lần đầu vào `/dang-ky` để tạo tài khoản; tài khoản đầu tiên nhận luôn dữ liệu đang có.
   Phiên đăng nhập giữ 60 ngày, mật khẩu băm bằng scrypt, không có ai ở ngoài vào được vì app chỉ mở trong Tailscale.
+- **Tài khoản** (biểu tượng người ở góc phải): đổi tên hiển thị, đổi mật khẩu, xem các thiết bị đang đăng nhập và
+  đăng xuất chúng từ xa. Đổi mật khẩu cũng đẩy mọi thiết bị khác ra.
 
 ## Tính năng
 
@@ -60,7 +62,7 @@ Sửa `.env.local` xong thì chạy `pm2 restart chi-tieu --update-env`.
 ```bash
 npm install
 npm run dev      # http://localhost:3005 (dữ liệu local: data/chi-tieu.db)
-npm test         # 76 test
+npm test         # 79 test
 npm run deploy   # push lên GitHub → Jetson pull, build, khởi động lại
 ```
 

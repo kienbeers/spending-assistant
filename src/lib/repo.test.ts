@@ -618,3 +618,47 @@ describe("nhiều tài khoản", () => {
     expect(() => auth.registerUser({ username: "bob", name: "", password: "khac" })).toThrow(/đã có người dùng/);
   });
 });
+
+describe("tài khoản", () => {
+  it("đổi mật khẩu: sai mật khẩu cũ thì không đổi, đúng thì các thiết bị khác bị đăng xuất", async () => {
+    const auth = await import("./auth");
+    const bob = auth.getUserByUsername("bob")!;
+    const dienThoai = auth.createSession(bob.id, "iPhone · Safari");
+    const mayTinh = auth.createSession(bob.id, "Mac · Chrome");
+    expect(auth.listSessions(bob.id, dienThoai.token)).toHaveLength(2);
+
+    expect(() => auth.changePassword(bob.id, "sai", "matkhaumoi", dienThoai.token)).toThrow(/không đúng/);
+    expect(auth.getSessionUser(mayTinh.token)?.id).toBe(bob.id);
+
+    auth.changePassword(bob.id, "matkhau", "matkhaumoi", dienThoai.token);
+    expect(auth.getSessionUser(dienThoai.token)?.id).toBe(bob.id); // thiết bị đang dùng vẫn còn
+    expect(auth.getSessionUser(mayTinh.token)).toBeNull(); // thiết bị khác bị văng ra
+    expect(auth.verifyPassword("matkhaumoi", auth.getUserByUsername("bob")!.passwordHash)).toBe(true);
+  });
+
+  it("chỉ thấy thiết bị của mình và đăng xuất được thiết bị khác", async () => {
+    const auth = await import("./auth");
+    const bob = auth.getUserByUsername("bob")!;
+    const chuSo = auth.getUserByUsername("chuso")!;
+    const cuaChuSo = auth.createSession(chuSo.id, "Windows · Edge");
+    const dangDung = auth.listSessions(bob.id, undefined)[0];
+
+    expect(auth.listSessions(chuSo.id, cuaChuSo.token).map((s) => s.device)).toEqual(["Windows · Edge"]);
+    expect(auth.listSessions(bob.id, undefined).some((s) => s.device === "Windows · Edge")).toBe(false);
+
+    const them = auth.createSession(bob.id, "Android · Chrome");
+    expect(auth.destroyOtherSessions(bob.id, them.token)).toBe(1);
+    expect(auth.getSessionUser(them.token)?.id).toBe(bob.id);
+    expect(auth.getSessionUser(cuaChuSo.token)?.id).toBe(chuSo.id); // không đụng vào người khác
+    expect(dangDung).toBeTruthy();
+  });
+
+  it("đọc tên thiết bị từ User-Agent", async () => {
+    const { deviceLabel } = await import("./auth");
+    expect(deviceLabel("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605 Version/18.0 Safari/605")).toBe(
+      "iPhone · Safari",
+    );
+    expect(deviceLabel("Mozilla/5.0 (Windows NT 10.0) Chrome/140 Safari/537")).toBe("Windows · Chrome");
+    expect(deviceLabel("")).toBe("Thiết bị khác");
+  });
+});
